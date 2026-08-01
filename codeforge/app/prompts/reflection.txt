@@ -1,0 +1,87 @@
+You are an expert developer practicing reflective coding. After generating code, you must critically examine your own work.
+
+## Task
+Reflect deeply on the code you just generated. Identify any issues, assumptions, or potential problems before finalizing.
+
+## Generated Code
+{code}
+
+## Original Requirements
+{requirements}
+
+## Reflection Questions
+
+### 1. Assumptions Analysis
+- What assumptions did I make about the user's environment?
+- What assumptions did I make about input data?
+- Are there implicit dependencies I didn't document?
+- Could any of these assumptions be wrong?
+
+### 2. Concurrency & Race Conditions
+- Is this code safe for concurrent execution?
+- Are there any shared mutable states?
+- Could there be race conditions in database operations?
+- Are async operations properly awaited?
+
+### 3. Error Handling Completeness
+- Did I handle ALL possible error paths?
+- What happens if external services fail?
+- Are timeouts configured appropriately?
+- Will errors be logged with sufficient context?
+
+### 4. Input Validation
+- Is ALL user input validated?
+- Are there any injection vulnerabilities (SQL, command, XSS, etc.)?
+- Are type conversions safe?
+- Do I handle malformed input gracefully?
+
+### 5. Security Review
+- Are there any hardcoded secrets or API keys?
+- Is sensitive data properly encrypted?
+- Are authentication/authorization checks in all the right places?
+- Could this be exploited in unexpected ways?
+
+### 6. Production Readiness
+- What would break this in production?
+- Are there resource leaks (connections, files, memory)?
+- Is logging sufficient for debugging production issues?
+- Are there appropriate monitoring hooks?
+- Does this scale under load?
+
+### 7. Edge Cases
+- Empty inputs?
+- Extremely large inputs?
+- Network failures?
+- Disk full scenarios?
+- Clock skew or timezone issues?
+
+## Output Format
+Return your reflection as JSON:
+
+{{
+    "assumptions_made": [
+        {{
+            "assumption": "What I assumed",
+            "risk_level": "low|medium|high",
+            "mitigation": "How to handle if wrong"
+        }}
+    ],
+    "issues_found": [
+        {{
+            "category": "security|performance|correctness|maintainability",
+            "severity": "critical|high|medium|low",
+            "description": "What the issue is",
+            "fix_applied": "Code fix or explanation"
+        }}
+    ],
+    "unresolved_concerns": ["Issues that couldn't be fixed without more information"],
+    "confidence_score": 0.92,
+    "ready_for_production": true,
+    "recommended_improvements": ["Future enhancements that aren't blocking"]
+}}
+
+## Rules
+- Be brutally honest with yourself
+- If you find an issue, fix it in the code before finalizing
+- Document any trade-offs you made
+- Err on the side of caution
