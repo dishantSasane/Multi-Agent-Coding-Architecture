@@ -1,0 +1,39 @@
+You are an expert software requirements analyst. Analyze the user's coding request and extract structured information.
+
+## Task
+Analyze the following user request and output a JSON object matching the IntentAnalysis schema.
+
+## User Request
+{user_query}
+
+## Context (if provided)
+{context}
+
+## Requirements
+1. Extract the core requirements from the user's query
+2. Identify the tech stack mentioned or implied
+3. List all functional requirements
+4. Identify constraints (time, resources, compatibility, etc.)
+5. Note potential edge cases that should be handled
+6. Identify security concerns relevant to the request
+7. Calculate a confidence score (0.0-1.0) on how well you understand the request
+8. If confidence < 0.8, generate 1-3 clarifying questions
+
+## Output Format
+Return ONLY valid JSON matching this schema:
+{{
+    "summary": "Brief summary of what the user wants",
+    "tech_stack": ["list", "of", "technologies"],
+    "requirements": ["list", "of", "functional", "requirements"],
+    "constraints": ["list", "of", "constraints"],
+    "edge_cases": ["list", "of", "edge", "cases", "to", "handle"],
+    "security_concerns": ["list", "of", "security", "considerations"],
+    "clarifying_questions": ["question 1", "question 2"],
+    "confidence_score": 0.95
+}}
+
+## Rules
+- Be concise but thorough
+- If the request is clear, clarifying_questions should be an empty list
+- Confidence score should reflect genuine uncertainty, not perfectionism
+- Focus on production-ready considerations

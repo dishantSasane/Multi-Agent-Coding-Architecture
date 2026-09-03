@@ -1,0 +1,47 @@
+FROM python:3.11-slim
+
+# Security: Minimal image with no unnecessary packages
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /sandbox
+
+# Install minimal runtime dependencies for Python execution
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    # Basic runtime only - no build tools, no shell access enhancement
+    libpq5 \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Pre-install common Python packages for testing
+RUN pip install --no-cache-dir \
+    pytest==7.4.3 \
+    hypothesis==6.92.0 \
+    requests==2.31.0 \
+    pydantic==2.5.2
+
+# Create isolated user with minimal permissions
+RUN groupadd --gid 1000 sandbox && \
+    useradd --uid 1000 --gid sandbox --shell /usr/sbin/nologin --create-home sandbox
+
+# Set restrictive permissions
+RUN chown -R root:sandbox /sandbox && \
+    chmod 755 /sandbox
+
+# Switch to sandbox user
+USER sandbox
+
+# Disable network access at the application level
+# (Network is also disabled at Docker runtime via --network=none)
+
+# Set resource limits via environment (enforced by Docker runtime)
+ENV SANDBOX_TIMEOUT=30 \
+    SANDBOX_MEMORY_LIMIT=512m
+
+# No CMD - code will be executed dynamically
+# Entry point is set by the orchestrator
+
+# Health check (always passes - container is ephemeral)
+HEALTHCHECK --interval=30s --timeout=5s --retries=1 \
+    CMD exit 0
