@@ -44,8 +44,8 @@ class EnsembleService:
         logger.info("generating_ensemble", size=self.ensemble_size)
 
         if providers is None:
-            # Use top providers by priority
-            providers = list(ModelProvider)[: self.ensemble_size]
+            # Token-optimized: use only 2 high-quality models
+            providers = [ModelProvider.QWEN, ModelProvider.KIMI]
 
         messages = []
         if system_prompt:

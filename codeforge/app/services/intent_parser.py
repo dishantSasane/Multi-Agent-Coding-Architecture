@@ -1,8 +1,10 @@
 """Intent Parser Service - Parse and clarify user intent."""
 
+import hashlib
 import json
 from typing import Any
 
+import redis.asyncio as redis
 import structlog
 from litellm import acompletion
 
@@ -20,6 +22,7 @@ class IntentParserService:
         """Initialize intent parser service."""
         self.settings = get_settings()
         self.prompt_template = self._load_prompt_template()
+        self.redis = redis.from_url(self.settings.redis_url, decode_responses=True)
 
     def _load_prompt_template(self) -> str:
         """Load the intent analysis prompt template."""
@@ -54,12 +57,14 @@ Output ONLY valid JSON, no markdown or explanations."""
         self,
         query: str,
         context: dict[str, Any] | None = None,
+        use_local: bool = False,
     ) -> IntentAnalysis:
         """Parse user intent from a coding query.
 
         Args:
             query: The user's coding query.
             context: Optional additional context.
+            use_local: If True, use local Ollama model (default False).
 
         Returns:
             IntentAnalysis object with parsed information.
@@ -67,8 +72,54 @@ Output ONLY valid JSON, no markdown or explanations."""
         Raises:
             IntentParsingError: If parsing fails.
         """
-        logger.info("parsing_intent", query_length=len(query))
+        logger.info("parsing_intent", query_length=len(query), use_local=use_local)
 
+        # Normalize query for cache key
+        normalized = query.lower().strip()
+        query_hash = hashlib.md5(normalized.encode()).hexdigest()
+        cache_key = f"intent:{query_hash}"
+
+        # Check cache first
+        try:
+            cached = await self.redis.get(cache_key)
+            if cached:
+                logger.info("intent_cache_hit", query_hash=query_hash)
+                return IntentAnalysis(**json.loads(cached))
+        except Exception as e:
+            logger.warning("redis_cache_error", error=str(e))
+            # Continue to LLM on cache failure (don't break the pipeline)
+
+        # Cache miss — call LLM (existing logic)
+        intent = await self._call_llm_for_intent(query, context, use_local)
+
+        # Store in cache
+        try:
+            await self.redis.setex(
+                cache_key,
+                86400,  # 24 hours
+                json.dumps(intent.model_dump())
+            )
+        except Exception as e:
+            logger.warning("redis_cache_write_error", error=str(e))
+
+        return intent
+
+    async def _call_llm_for_intent(
+        self,
+        query: str,
+        context: dict[str, Any] | None = None,
+        use_local: bool = False,
+    ) -> IntentAnalysis:
+        """Call LLM for intent analysis.
+
+        Args:
+            query: The user's coding query.
+            context: Optional additional context.
+            use_local: If True, use local Ollama model.
+
+        Returns:
+            IntentAnalysis object.
+        """
         try:
             # Prepare the prompt
             prompt = self.prompt_template.format(
@@ -76,16 +127,33 @@ Output ONLY valid JSON, no markdown or explanations."""
                 context=json.dumps(context or {}),
             )
 
-            # Call LLM
-            response = await acompletion(
-                model="gpt-4o",
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=1000,
-                temperature=0.3,
-            )
-
-            # Parse response
-            content = response.choices[0].message.content.strip()
+            if use_local:
+                # Use local Ollama model
+                import httpx
+                ollama_client = httpx.AsyncClient(
+                    base_url=self.settings.ollama_api_base,
+                    timeout=60.0,
+                )
+                try:
+                    response = await ollama_client.post(
+                        "/api/generate",
+                        json={
+                            "model": "qwen2.5-coder:7b",
+                            "prompt": prompt,
+                            "stream": False,
+                        },
+                    )
+                    response.raise_for_status()
+                    data = response.json()
+                    content = data.get("response", "")
+                except Exception as e:
+                    logger.warning("ollama_failed_fallback_to_cloud", error=str(e))
+                    # Fallback to cloud
+                    content = await self._call_cloud_llm(prompt)
+                finally:
+                    await ollama_client.aclose()
+            else:
+                content = await self._call_cloud_llm(prompt)
 
             # Extract JSON from response (handle markdown code blocks)
             if content.startswith("```"):
@@ -134,6 +202,23 @@ Output ONLY valid JSON, no markdown or explanations."""
                 "Failed to parse user intent",
                 {"error": str(e), "error_type": type(e).__name__},
             )
+
+    async def _call_cloud_llm(self, prompt: str) -> str:
+        """Call cloud LLM for intent analysis.
+
+        Args:
+            prompt: The prompt to send.
+
+        Returns:
+            Response content string.
+        """
+        response = await acompletion(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=1000,
+            temperature=0.3,
+        )
+        return response.choices[0].message.content.strip()
 
     def needs_clarification(self, intent: IntentAnalysis) -> bool:
         """Check if intent requires user clarification.

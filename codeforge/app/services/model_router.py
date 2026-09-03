@@ -5,6 +5,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any
 
+import httpx
 import structlog
 from litellm import acompletion
 
@@ -48,6 +49,23 @@ class ModelRouterService:
             ModelProvider.QWEN: 3,
             ModelProvider.GEMINI: 4,
             ModelProvider.KIMI: 5,
+        }
+        
+        # Ollama client (for free local inference)
+        self.ollama_base = self.settings.ollama_api_base
+        self.ollama_client = httpx.AsyncClient(
+            base_url=self.ollama_base,
+            timeout=120.0,
+        )
+        
+        # Cost tier routing
+        self.cloud_models = {
+            ModelProvider.QWEN: "qwen/qwen-2.5-coder-32b-instruct",
+            ModelProvider.KIMI: "moonshotai/kimi-k2-72b",
+        }
+        self.local_models = {
+            ModelProvider.QWEN: "qwen2.5-coder:7b",
+            ModelProvider.KIMI: "mistral:7b",  # Fallback if Kimi not available locally
         }
 
     def _get_model_for_provider(self, provider: ModelProvider) -> str:
@@ -124,6 +142,7 @@ class ModelRouterService:
         max_tokens: int = 2000,
         temperature: float = 0.7,
         timeout: int | None = None,
+        use_local: bool = False,
     ) -> dict[str, Any]:
         """Execute a completion with a specific model.
 
@@ -133,6 +152,7 @@ class ModelRouterService:
             max_tokens: Maximum tokens to generate.
             temperature: Sampling temperature.
             timeout: Request timeout in seconds.
+            use_local: If True, use local Ollama model.
 
         Returns:
             Response dictionary with content and metadata.
@@ -141,7 +161,11 @@ class ModelRouterService:
             CircuitBreakerOpenError: If circuit breaker is open.
             ModelUnavailableError: If model is unavailable.
         """
-        # Check circuit breaker
+        # Use local model if requested
+        if use_local:
+            return await self._call_ollama(provider, messages, max_tokens, temperature)
+        
+        # Check circuit breaker for cloud models
         await self.circuit_breaker.check_and_raise(provider.value)
 
         model_name = self._get_model_for_provider(provider)
@@ -206,6 +230,75 @@ class ModelRouterService:
                 provider=provider.value,
                 model=model_name,
                 details={"error": error_msg},
+            )
+
+    async def _call_ollama(
+        self,
+        provider: ModelProvider,
+        messages: list[dict[str, str]],
+        max_tokens: int,
+        temperature: float,
+    ) -> dict[str, Any]:
+        """Call local Ollama model.
+
+        Args:
+            provider: The provider to use (determines which local model).
+            messages: List of message dicts.
+            max_tokens: Maximum tokens to generate.
+            temperature: Sampling temperature.
+
+        Returns:
+            Response dictionary with content and metadata.
+        """
+        model_id = self.local_models.get(provider, "qwen2.5-coder:7b")
+        start_time = time.time()
+        
+        try:
+            # Extract system and user messages
+            system_prompt = ""
+            user_prompt = ""
+            for msg in messages:
+                if msg["role"] == "system":
+                    system_prompt = msg["content"]
+                elif msg["role"] == "user":
+                    user_prompt = msg["content"]
+            
+            response = await self.ollama_client.post(
+                "/api/generate",
+                json={
+                    "model": model_id,
+                    "prompt": user_prompt,
+                    "system": system_prompt,
+                    "stream": False,
+                    "options": {"temperature": temperature},
+                },
+            )
+            response.raise_for_status()
+            data = response.json()
+            
+            latency_ms = int((time.time() - start_time) * 1000)
+            
+            return {
+                "success": True,
+                "content": data.get("response", ""),
+                "provider": f"ollama:{provider.value}",
+                "model": model_id,
+                "latency_ms": latency_ms,
+                "prompt_tokens": None,
+                "completion_tokens": None,
+                "total_tokens": None,
+            }
+            
+        except Exception as e:
+            logger.warning("ollama_failed", error=str(e))
+            # Fallback to cloud if local fails
+            # Re-call with use_local=False to use cloud
+            return await self.execute_with_model(
+                provider=provider,
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                use_local=False,
             )
 
     def _update_stats(self, model_key: str, success: bool, latency_ms: int) -> None:

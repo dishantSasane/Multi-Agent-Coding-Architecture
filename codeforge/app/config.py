@@ -52,7 +52,7 @@ class Settings(BaseSettings):
     # Application
     log_level: str = Field(default="INFO", description="Logging level")
     max_correction_attempts: int = Field(default=3, ge=1, le=10, description="Maximum self-correction retries")
-    default_ensemble_size: int = Field(default=3, ge=1, le=5, description="Number of models in ensemble")
+    default_ensemble_size: int = Field(default=2, ge=1, le=5, description="Number of models in ensemble")
     secret_key: str = Field(default="change-me-in-production", description="Secret key for JWT")
 
     # Model timeouts
@@ -61,6 +61,26 @@ class Settings(BaseSettings):
 
     # Validation
     hypothesis_iterations: int = Field(default=100, ge=10, le=1000, description="Hypothesis test iterations")
+
+    # Ollama (Local Models)
+    ollama_api_base: str = Field(
+        default="http://localhost:11434",
+        description="Ollama API base URL",
+    )
+
+    # Token optimization flags
+    use_debate_engine: bool = Field(
+        default=False,
+        description="Enable LLM debate (expensive)",
+    )
+    use_local_for_intent: bool = Field(
+        default=True,
+        description="Use Ollama for intent analysis",
+    )
+    use_local_for_correction: bool = Field(
+        default=True,
+        description="Use Ollama for self-correction",
+    )
 
     @property
     def llm_api_keys(self) -> dict[str, str | None]:

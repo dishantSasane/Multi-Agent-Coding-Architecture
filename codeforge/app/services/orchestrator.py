@@ -108,10 +108,11 @@ class OrchestratorService:
             await session.commit()
 
             try:
-                # Parse intent
+                # Parse intent (use local Ollama if configured)
                 intent = await self.intent_parser.parse_intent(
                     query=task.user_query,
                     context=task.intent_analysis or {},
+                    use_local=self.settings.use_local_for_intent,
                 )
 
                 # Store results
@@ -286,6 +287,99 @@ class OrchestratorService:
                 task.last_error = str(e)
                 await session.commit()
                 raise
+
+    async def select_best_output(self, task_id: UUID) -> Task:
+        """Select best model output using heuristics (zero LLM tokens).
+
+        Args:
+            task_id: Task UUID.
+
+        Returns:
+            Updated Task with debate_result set from heuristic voting.
+
+        Raises:
+            TaskNotFoundError: If task not found.
+            CodeForgeException: If no model outputs available.
+        """
+        logger.info("selecting_best_output", task_id=str(task_id))
+
+        async with self.session_maker() as session:
+            task = await self._get_task(session, task_id)
+            if not task:
+                raise TaskNotFoundError(str(task_id))
+
+            task.status = TaskStatusEnum.DEBATING  # Keep status for dashboard compatibility
+            await session.commit()
+
+            outputs = [ModelOutput(**o) for o in (task.model_outputs or [])]
+            if not outputs:
+                raise CodeForgeException("No model outputs to evaluate")
+
+            # Heuristic scoring: length + structure + keyword checks
+            best = self._heuristic_vote(outputs)
+
+            # Store as pseudo-debate result for compatibility
+            from app.models.models import DebateResult
+
+            task.debate_result = DebateResult(
+                winner_provider=best.provider,
+                winner_model=best.model_name,
+                consensus_reached=True,
+                scores={"heuristic": 1.0},
+                critiques=["Selected via heuristic voting (token-optimized mode)"],
+            ).model_dump()
+
+            await session.commit()
+
+            logger.info(
+                "best_output_selected",
+                task_id=str(task_id),
+                winner=best.provider,
+            )
+
+            return task
+
+    def _heuristic_vote(self, outputs: list[ModelOutput]) -> ModelOutput:
+        """Score outputs without LLM calls.
+
+        Args:
+            outputs: List of model outputs.
+
+        Returns:
+            Best output based on heuristic scoring.
+        """
+        scored = []
+        for output in outputs:
+            score = 0
+            code = output.code or ""
+
+            # Prefer longer, more complete solutions (but cap to avoid bloat)
+            score += min(len(code), 5000) * 0.01
+
+            # Bonus for type hints
+            if "def " in code and "->" in code:
+                score += 50
+
+            # Bonus for docstrings
+            if '"""' in code or "'''" in code:
+                score += 30
+
+            # Bonus for error handling
+            if "try:" in code and "except" in code:
+                score += 40
+
+            # Bonus for comprehensive imports
+            if "import" in code:
+                score += 20
+
+            # Penalty for placeholder/TODO comments
+            if "TODO" in code.upper() or "FIXME" in code.upper() or "placeholder" in code.lower():
+                score -= 100
+
+            scored.append((score, output))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return scored[0][1]
 
     async def synthesize_solution(self, task_id: UUID) -> Task:
         """Synthesize final solution from debate results.
@@ -472,8 +566,11 @@ class OrchestratorService:
             # Step 3: Generate code
             await self.generate_code(task_id)
 
-            # Step 4: Run debate
-            await self.run_debate(task_id)
+            # Step 4: Select best output (token-optimized, skip debate)
+            if self.settings.use_debate_engine:
+                await self.run_debate(task_id)
+            else:
+                await self.select_best_output(task_id)
 
             # Step 5: Synthesize
             await self.synthesize_solution(task_id)
