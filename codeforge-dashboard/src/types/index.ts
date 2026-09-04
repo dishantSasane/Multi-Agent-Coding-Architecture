@@ -143,6 +143,7 @@ export interface WebSocketMessage {
     | 'model_progress'
     | 'validation_result'
     | 'completed'
+    | 'failed'
     | 'error'
     | 'debate_update';
   task_id?: string;

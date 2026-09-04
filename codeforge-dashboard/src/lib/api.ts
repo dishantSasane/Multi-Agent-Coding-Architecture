@@ -1,6 +1,6 @@
 import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';
 import { useAppStore } from '@/store/appStore';
-import type { Task, TaskResult, IntentAnalysis } from '@/types';
+import type { Task, TaskResult } from '@/types';
 
 const getBaseUrl = () => {
   const stored = localStorage.getItem('codeforge-backend-url');

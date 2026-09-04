@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import Editor, { OnMount } from '@monaco-editor/react';
 import { cn } from '@/lib/utils';
 import { getLanguageFromFilename } from '@/lib/utils';

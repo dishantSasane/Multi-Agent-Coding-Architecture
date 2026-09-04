@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react';
 import { submitQuery, confirmTask as apiConfirmTask } from '@/lib/api';
-import type { Task, ClarifyingQuestion } from '@/types';
+import type { Task } from '@/types';
 
 interface UseCodeGenerationReturn {
   task: Task | null;

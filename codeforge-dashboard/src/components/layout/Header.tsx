@@ -1,4 +1,3 @@
-import React from 'react';
 import { Bolt } from 'lucide-react';
 import { ConnectionStatus } from '@/components/shared/ConnectionStatus';
 

@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { Menu, X, Bolt, Clock, Settings, ChevronRight } from 'lucide-react';
+import { useState } from 'react';
+import { motion } from 'framer-motion';
+import { X, Bolt, Clock, Settings, ChevronRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useNavigate, useLocation } from 'react-router-dom';
 

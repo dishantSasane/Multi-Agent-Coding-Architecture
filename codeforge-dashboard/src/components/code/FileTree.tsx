@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { motion } from 'framer-motion';
 import { Folder, FolderOpen, FileCode, ChevronRight, ChevronDown } from 'lucide-react';
 import { cn } from '@/lib/utils';

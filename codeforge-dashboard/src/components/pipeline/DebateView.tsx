@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ChevronDown, ChevronUp, MessageSquare, Shield, Zap, Code, Star } from 'lucide-react';
 import type { DebateResult } from '@/types';
@@ -57,8 +57,6 @@ export function DebateView({ debateResult, isExpanded = true }: DebateViewProps)
             <div className="p-4 space-y-4">
               {/* Critiques */}
               {debateResult.critiques.map((critique, index) => {
-                const Icon = scoreIcons.correctness;
-                
                 return (
                   <div
                     key={index}

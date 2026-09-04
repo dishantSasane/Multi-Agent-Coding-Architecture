@@ -1,4 +1,3 @@
-import React from 'react';
 import { Wifi, WifiOff, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAppStore } from '@/store/appStore';

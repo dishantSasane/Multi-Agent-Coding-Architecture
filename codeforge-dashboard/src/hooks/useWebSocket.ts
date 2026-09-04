@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import type { WebSocketMessage, TaskStatus } from '@/types';
+import type { WebSocketMessage } from '@/types';
 import { WS_RECONNECT_INTERVALS, WS_HEARTBEAT_INTERVAL } from '@/lib/constants';
 import { getBackendUrl } from '@/lib/api';
 

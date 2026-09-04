@@ -1,5 +1,4 @@
-import React from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion } from 'framer-motion';
 import { CheckCircle, XCircle, AlertTriangle, FileCode, Shield, FlaskConical } from 'lucide-react';
 import type { ValidationReport } from '@/types';
 import { cn } from '@/lib/utils';
