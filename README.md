@@ -1,106 +1,175 @@
 # CodeForge — Multi-Agent Coding Orchestrator
 
-CodeForge is a production-ready AI coding assistant that routes your natural-language request through a **pipeline of multiple LLM agents**, each specialising in a different part of the task, and delivers validated, multi-file code.
+> **A multi-agent AI software engineering platform that decomposes coding tasks, routes work across different LLMs and APIs, collects and reasons over their results, validates the solutions, and combines the strongest results into a structured software project.**
 
-## Architecture
+CodeForge is built around a simple idea: **no single model has to do everything.**
 
-```
-User Query
-    │
-    ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  FastAPI  (port 8000)                                           │
-│                                                                 │
-│  1. Intent Parser   → understands what you want                 │
-│  2. Ensemble        → 1-N models generate code in parallel      │
-│  3. Debate Engine   → models critique each other (optional)     │
-│  4. Synthesis       → best solution merged & cleaned            │
-│  5. Validator       → syntax · static analysis · import check   │
-│  6. Sandbox         → executes code in Docker (optional)        │
-│  7. Self-Correction → fixes failures automatically              │
-└──────────────────────────────┬──────────────────────────────────┘
-                               │ WebSocket (real-time progress)
-                               ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  React Dashboard  (port 5173)                                   │
-│  • Pipeline stage tracker                                       │
-│  • Multi-file tab viewer + per-file + ZIP download             │
-│  • Model activity cards                                         │
-│  • Validation report                                            │
-└─────────────────────────────────────────────────────────────────┘
+A natural-language software request can be broken into smaller tasks and routed to different AI models or external APIs based on the work required. CodeForge collects the resulting outputs, compares and reasons over them, validates the generated code, and combines the results into a coherent, structured multi-file project.
 
-External Services (cloud — no local containers required)
-  • Neon         → PostgreSQL database
-  • Upstash      → Redis (Celery broker + result backend)
-  • Groq         → GPT OSS 120B (primary LLM)
-  • OpenRouter   → fallback LLMs (optional)
+The system is designed to work across multiple model providers and model families, including **OpenAI GPT, Anthropic Claude, Qwen, Kimi, DeepSeek, Groq, and Google Gemini**, through a common provider abstraction.
+
+The final output is not simply an LLM response. It is a **structured project that has passed the applicable generation, reasoning, extraction, validation, and testing stages** before being presented through the CodeForge dashboard.
+
+---
+
+## Full Demo
+
+**[▶ Watch the CodeForge Demonstration](assets/codeforge-demo.mp4)**
+
+> If GitHub does not provide inline playback for the local video, link this section to the hosted version of the demo instead.
+
+<!--
+If GitHub does not render the local video inline, replace the line above
+with a link to the uploaded video (YouTube, Google Drive, etc.).
+-->
+
+---
+
+## Screenshots
+
+### Dashboard
+
+![CodeForge Dashboard](assets/dashboard.png)
+
+### Multi-Agent Pipeline
+
+![Multi-Agent Pipeline](assets/pipeline.png)
+
+
+### Validation Results
+
+![Validation Results](assets/validation.png)
+
+
+---
+
+### Supported AI Providers
+
+- **OpenAI GPT**
+- **Anthropic Claude**
+- **Qwen**
+- **Kimi**
+- **DeepSeek**
+- **Groq**
+- **Google Gemini**
+- **LiteLLM** — unified provider abstraction
+
+CodeForge can also orchestrate work involving external APIs and services such as Google APIs, Gmail, MCP, REST APIs, databases, and Git/GitHub workflows.
+
+---
+
+# Architecture
+
+CodeForge keeps generated projects as structured `code_files` rather than flattening everything into a single code block.
+
+```text
+                         USER
+                           │
+                           ▼
+                  ┌────────────────┐
+                  │ Task / Intent  │
+                  │ Decomposition  │
+                  └───────┬────────┘
+                          │
+              ┌───────────┼───────────┐
+              ▼           ▼           ▼
+           Model/API   Model/API   Model/API
+              │           │           │
+              └───────────┼───────────┘
+                          ▼
+                 Collect & Normalize
+                          │
+                          ▼
+                  Reason / Critique
+                          │
+                          ▼
+                      Synthesis
+                          │
+                          ▼
+                Structured Code Files
+                          │
+                          ▼
+                 Validate & Test
+                          │
+                          ▼
+                   CodeForge UI
 ```
 
 ---
 
-## Prerequisites
+# Key Capabilities
 
-| Requirement | Notes |
-|-------------|-------|
-| Docker + Docker Compose | Option A only |
-| conda or Python 3.11 | Option B only |
-| Node 18+ | Option B frontend |
-| Neon account | Free — [neon.tech](https://neon.tech) |
-| Upstash account | Free — [upstash.com](https://upstash.com) |
-| Google AI Studio key | Free — [aistudio.google.com](https://aistudio.google.com/app/apikey) |
+- Natural-language software requirements
+- Task decomposition and intelligent routing
+- Multi-model / multi-provider generation
+- Parallel candidate solutions
+- Cross-model reasoning and critique
+- Solution synthesis
+- Structured multi-file extraction
+- Nested and mixed-language projects
+- File-aware validation
+- Syntax and import validation
+- Optional sandbox execution
+- Real-time WebSocket progress
+- React dashboard
+- Celery background processing
+- PostgreSQL persistence
+- Redis task processing
 
 ---
 
-## Option A — Docker (Recommended)
+# Technology Stack
+
+**Backend:** Python · FastAPI · SQLAlchemy · Pydantic · Celery · LiteLLM · WebSockets
+
+**Frontend:** React · TypeScript · Vite · Zustand
+
+**Infrastructure:** PostgreSQL / Neon · Redis / Upstash · Docker
+
+**AI:** OpenAI GPT · Anthropic Claude · Qwen · Kimi · DeepSeek · Groq · Google Gemini · LiteLLM
+
+---
+
+# Project Structure
+
+```text
+Multi-Agent-Coding-Architecture/
+├── codeforge/                 # FastAPI backend
+│   ├── app/
+│   │   ├── api/
+│   │   ├── core/
+│   │   ├── models/
+│   │   ├── prompts/
+│   │   └── services/
+│   ├── requirements.txt
+│   └── .env.example
+│
+├── codeforge-dashboard/       # React + TypeScript frontend
+├── assets/                    # Demo video and screenshots
+├── docker-compose.yml
+└── README.md
+```
+
+---
+
+# Setup
+
+## Backend
 
 ```bash
-# 1. Clone
-git clone <repo-url>
-cd Multi-Agent-Coding-Architecture
-
-# 2. Configure environment
-cp codeforge/.env.example codeforge/.env
-# Open codeforge/.env and fill in your real API keys and URLs
-
-# 3. Build and start all services
-docker compose up --build
-
-# 4. Open the dashboard
-#    http://localhost:5173
-```
-
-All three services start together:
-- **backend** — FastAPI on port 8000
-- **celery** — background task worker
-- **frontend** — Vite dev server on port 5173
-
-To stop: `docker compose down`  
-To rebuild after code changes: `docker compose up --build`
-
----
-
-## Option B — Manual Setup (conda)
-
-### Backend
-
-```bash
-# Create environment
 conda create -n codeforge python=3.11 -y
 conda activate codeforge
 
-# Install dependencies
-pip install -r codeforge/requirements.txt
-
-# Configure environment
-cp codeforge/.env.example codeforge/.env
-# Edit codeforge/.env with your API keys
-
-# Start the API server
 cd codeforge
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+pip install -r requirements.txt
+cp .env.example .env
+
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-### Celery Worker (separate terminal)
+## Celery
+
+In a second terminal:
 
 ```bash
 conda activate codeforge
@@ -108,114 +177,44 @@ cd codeforge
 python -m celery -A app.celery_app worker --loglevel=info --pool=solo
 ```
 
-### Frontend (separate terminal)
+## Frontend
 
 ```bash
 cd codeforge-dashboard
 npm install
 npm run dev
-# Open http://localhost:5173
 ```
 
----
-
-## Required API Keys & Services
-
-### 1. Groq API Key (primary LLM — **required**)
-- Sign up at [console.groq.com](https://console.groq.com/keys)
-- Set `GROQ_API_KEY` in `.env`
-- Default model: `openai/gpt-oss-120b` via LiteLLM's `groq/` provider
-
-### 2. Neon PostgreSQL (**required**)
-- Sign up at [neon.tech](https://neon.tech) — free tier available
-- Create a project and copy the **asyncpg connection string**
-- Set `DATABASE_URL` — must include `?sslmode=require`
-
-### 3. Upstash Redis (**required**)
-- Sign up at [upstash.com](https://upstash.com) — free tier available
-- Create a Redis database, copy the **TLS (rediss://) connection string**
-- Set `REDIS_URL`, `CELERY_BROKER_URL`, and `CELERY_RESULT_BACKEND`
-
-### 4. OpenRouter (optional fallback)
-- Sign up at [openrouter.ai](https://openrouter.ai) — free tier available
-- Set `OPENROUTER_API_KEY`, `OPENAI_API_KEY` (same key), and  
-  `OPENAI_API_BASE=https://openrouter.ai/api/v1`
-- Used automatically when Gemini quota runs out
+Open `http://localhost:5173`.
 
 ---
 
-## Configuration Reference
+# Configuration
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `DATABASE_URL` | — | Neon PostgreSQL asyncpg URL |
-| `REDIS_URL` | — | Upstash Redis TLS URL |
-| `CELERY_BROKER_URL` | — | Same as `REDIS_URL` |
-| `CELERY_RESULT_BACKEND` | — | Same as `REDIS_URL` |
-| `GROQ_API_KEY` | — | Groq API key |
-| `GROQ_MODEL` | `openai/gpt-oss-120b` | Groq model slug |
-| `SANDBOX_ENABLED` | `False` | Enable Docker sandbox (needs Docker-in-Docker) |
-| `DEFAULT_ENSEMBLE_SIZE` | `1` | Models to call per query (1 = cheapest) |
-| `USE_DEBATE_ENGINE` | `False` | LLM debate stage (extra API calls) |
-| `MAX_CORRECTION_ATTEMPTS` | `3` | Self-correction retry limit |
-| `DEBUG` | `True` | Show full tracebacks in HTTP responses |
-| `SECRET_KEY` | change me | JWT signing key — **change in production** |
+Configure the required services in `codeforge/.env`:
 
----
-
-## Known Issues & Limits
-
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| Groq model error | Model slug or account limits | Check `GROQ_MODEL` and Groq account limits |
-| Each query uses 2 API calls | Intent analysis + code generation | Expected behaviour; set `USE_LOCAL_FOR_INTENT=True` with Ollama to reduce it |
-| `SANDBOX_ENABLED=False` required | No Docker-in-Docker in most envs | Leave `False`; code is validated but not executed |
-| Celery worker shows `connection refused` | Upstash URL missing or wrong | Check `CELERY_BROKER_URL` in `.env`; must be `rediss://` (TLS) |
-| `ValidationError` on import resolution | Generated code uses local imports | Fixed in validator — single-word bare imports are skipped |
-
----
-
-## Project Structure
-
-```
-Multi-Agent-Coding-Architecture/
-├── codeforge/                  # FastAPI backend
-│   ├── app/
-│   │   ├── api/                # Route handlers (query, status, websocket)
-│   │   ├── core/               # Circuit breaker, exceptions, security
-│   │   ├── models/             # SQLAlchemy ORM + Pydantic schemas
-│   │   ├── prompts/            # LLM prompt templates
-│   │   └── services/           # Orchestrator, ensemble, validator, sandbox …
-│   ├── Dockerfile
-│   ├── requirements.txt
-│   └── .env.example
-│
-├── codeforge-dashboard/        # React + Vite + TypeScript frontend
-│   ├── src/
-│   │   ├── components/         # UI components
-│   │   ├── hooks/              # useWebSocket, useCodeGeneration
-│   │   ├── store/              # Zustand app store
-│   │   └── lib/                # API client
-│   └── Dockerfile
-│
-├── docker-compose.yml          # Orchestrates backend + celery + frontend
-└── README.md                   # This file
+```env
+GROQ_API_KEY=your_groq_api_key
+DATABASE_URL=your_postgresql_connection_string
+REDIS_URL=your_redis_connection_string
+CELERY_BROKER_URL=your_redis_connection_string
+CELERY_RESULT_BACKEND=your_redis_connection_string
 ```
 
+> Never commit `.env` files or API keys.
+
 ---
 
-## Git Commands (after setup)
+# Project Status
 
-```bash
-# Stage everything
-git add .
+**Working Prototype — Active Development**
 
-# Verify .env is excluded (should NOT appear)
-git status | grep ".env"
+The current implementation demonstrates the complete multi-agent orchestration workflow from natural-language request to validated, structured software output.
 
-# Commit
-git commit -m "Initial CodeForge commit"
+---
 
-# Push
-git push origin main
-```
+# Author
+
+**Dishant Sasane**
+
+Built as a hands-on exploration of multi-agent AI systems, software engineering automation, model orchestration, structured code generation, validation, and full-stack AI application architecture.
