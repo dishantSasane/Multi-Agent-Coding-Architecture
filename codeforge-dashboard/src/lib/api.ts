@@ -4,7 +4,13 @@ import type { Task, TaskResult, IntentAnalysis } from '@/types';
 
 const getBaseUrl = () => {
   const stored = localStorage.getItem('codeforge-backend-url');
-  return stored || 'http://localhost:8000';
+  // If a custom URL is stored and it's not localhost:5173 (the dev server itself),
+  // use it directly. Otherwise use an empty string so requests go through the
+  // Vite proxy (/api → http://localhost:8000) and avoid CORS entirely.
+  if (stored && !stored.includes('localhost:5173') && !stored.includes('127.0.0.1:5173')) {
+    return stored;
+  }
+  return '';
 };
 
 const api = axios.create({

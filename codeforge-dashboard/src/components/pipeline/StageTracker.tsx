@@ -21,8 +21,17 @@ export function StageTracker({
     <div className="w-full overflow-x-auto pb-4">
       <div className="flex items-center min-w-max">
         {STAGES.map((stage, index) => {
-          const isCompleted = completedStages.includes(stage.id) || index < currentIndex;
-          const isActive = stage.id === currentStage && !failedStage;
+          // When the pipeline finishes, every non-FAILED stage should show a
+          // green checkmark — including the COMPLETED stage itself which would
+          // otherwise show a spinning loader because index < currentIndex is
+          // false when stage.id === 'COMPLETED' and currentIndex === 11.
+          const isAllDone = currentStage === 'COMPLETED';
+          const isCompleted =
+            completedStages.includes(stage.id) ||
+            index < currentIndex ||
+            (isAllDone && stage.id !== 'FAILED');
+          // Active (spinning) only while a stage is in-progress, never when done.
+          const isActive = stage.id === currentStage && !failedStage && !isAllDone;
           const isFailed = stage.id === failedStage;
           const Icon = stage.icon;
 
@@ -75,7 +84,11 @@ export function StageTracker({
                 <div
                   className={cn(
                     'w-12 h-0.5 mx-2',
-                    index < currentIndex ? 'bg-emerald-600' : 'bg-slate-700'
+                    // Green when this connector leads to a completed stage; when
+                    // all done, every connector up to (but not including) FAILED.
+                    (isAllDone ? stage.id !== 'FAILED' : index < currentIndex)
+                      ? 'bg-emerald-600'
+                      : 'bg-slate-700'
                   )}
                 />
               )}

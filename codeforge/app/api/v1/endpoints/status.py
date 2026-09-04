@@ -4,9 +4,9 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException
 
-from app.models.schemas import TaskStatusResponse
+from app.models.models import TaskStatusResponse
 from app.models.database import AsyncSessionLocal
-from app.models.models import Task
+from app.models.orm_models import Task
 
 router = APIRouter()
 
@@ -32,7 +32,7 @@ async def get_status(
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
 
-        return TaskStatusResponse.model_validate(task)
+        return TaskStatusResponse(**task.to_dict())
 
 
 @router.get("/result", response_model=TaskStatusResponse)
@@ -56,10 +56,11 @@ async def get_result(
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
 
-        if task.status.value not in ["COMPLETED", "FAILED"]:
+        status_str = task.status.value if hasattr(task.status, "value") else str(task.status)
+        if status_str not in ["completed", "failed"]:
             raise HTTPException(
                 status_code=400,
-                detail=f"Task not yet completed. Current status: {task.status.value}",
+                detail=f"Task not yet completed. Current status: {status_str}",
             )
 
-        return TaskStatusResponse.model_validate(task)
+        return TaskStatusResponse(**task.to_dict())

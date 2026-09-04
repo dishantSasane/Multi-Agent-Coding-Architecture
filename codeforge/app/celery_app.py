@@ -4,11 +4,31 @@ import os
 from celery import Celery
 from kombu import Exchange, Queue
 
+# Load .env via pydantic-settings so REDIS_URL is available
+from app.config import settings as _settings
+
+# Resolve broker URL: prefer explicit env overrides, then settings.redis_url (reads .env)
+_redis_url = str(_settings.redis_url)
+_broker_url = os.getenv("CELERY_BROKER_URL", _redis_url)
+_backend_url = os.getenv("CELERY_RESULT_BACKEND", _redis_url)
+
+# SSL transport options for Upstash (rediss:// requires TLS; CERT_NONE for Windows)
+_is_tls = _broker_url.startswith("rediss://")
+_broker_transport_options: dict = (
+    {"visibility_timeout": 3600, "socket_connect_timeout": 10}
+)
+_redis_backend_use_ssl: dict | None = None
+if _is_tls:
+    _broker_transport_options["ssl_cert_reqs"] = "CERT_NONE"
+    _redis_backend_use_ssl = {
+        "ssl_cert_reqs": "CERT_NONE",
+    }
+
 # Celery configuration
 celery_app = Celery(
     "codeforge",
-    broker=os.getenv("CELERY_BROKER_URL", "redis://redis:6379/0"),
-    backend=os.getenv("CELERY_RESULT_BACKEND", "redis://redis:6379/0"),
+    broker=_broker_url,
+    backend=_backend_url,
     include=[
         "app.services.orchestrator",
         "app.services.intent_parser",
@@ -20,6 +40,11 @@ celery_app = Celery(
         "app.services.self_correction",
     ],
 )
+
+# SSL transport options for Upstash (must be set before any task config)
+celery_app.conf.broker_transport_options = _broker_transport_options
+if _redis_backend_use_ssl:
+    celery_app.conf.redis_backend_use_ssl = _redis_backend_use_ssl
 
 # Task queues
 celery_app.conf.task_queues = (

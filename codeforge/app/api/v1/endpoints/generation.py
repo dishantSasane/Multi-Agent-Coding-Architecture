@@ -4,8 +4,8 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException
 
-from app.models.schemas import TaskStatusResponse
-from app.services.orchestrator import Orchestrator
+from app.models.models import TaskStatusResponse
+from app.services.orchestrator import get_orchestrator
 
 router = APIRouter()
 
@@ -22,14 +22,10 @@ async def trigger_generation(
     Returns:
         Updated task status.
     """
-    from app.models.database import AsyncSessionLocal
-
-    orchestrator = Orchestrator(db=AsyncSessionLocal)
-
     try:
+        orchestrator = get_orchestrator()
         task = await orchestrator.trigger_generation(task_id)
-
-        return TaskStatusResponse.model_validate(task)
+        return TaskStatusResponse(**task.to_dict())
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e

@@ -42,6 +42,13 @@ class ConfirmRequest(BaseModel):
 
 
 # Response Schemas
+class CodeFile(BaseModel):
+    """Schema for a single file in a multi-file code generation result."""
+
+    filename: str = Field(..., description="Filename, e.g. 'models.py'")
+    content: str = Field(..., description="Complete file content")
+
+
 class TaskStatusResponse(BaseModel):
     """Response schema for task status."""
 
@@ -56,6 +63,11 @@ class TaskStatusResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     completed_at: datetime | None = None
+    # Generated code fields — populated once pipeline reaches COMPLETED
+    final_code: str | None = None
+    synthesized_code: str | None = None
+    # Multi-file output — None when result is a single file
+    code_files: list[CodeFile] | None = None
 
 
 class ModelOutput(BaseModel):

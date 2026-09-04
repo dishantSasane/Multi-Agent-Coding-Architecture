@@ -2,6 +2,9 @@
 
 import enum
 
+# Re-exported so service files can do `from app.models.enums import ModelProvider`
+from app.core.constants import ModelProvider  # noqa: F401
+
 
 class TaskStatusEnum(str, enum.Enum):
     """Task status enumeration for database."""
@@ -33,6 +36,7 @@ class ConfirmationStatusEnum(str, enum.Enum):
 class ModelProviderEnum(str, enum.Enum):
     """Model provider enumeration for database."""
 
+    OPENROUTER = "openrouter"
     OPENAI = "openai"
     ANTHROPIC = "anthropic"
     KIMI = "kimi"

@@ -112,6 +112,11 @@ export interface TaskResult {
   known_limitations: string[];
 }
 
+export interface CodeFile {
+  filename: string;
+  content: string;
+}
+
 export interface Task {
   id: string;
   query: string;
@@ -125,6 +130,11 @@ export interface Task {
   error: string | null;
   created_at: string;
   updated_at: string;
+  // Generated code — populated from /status once pipeline completes
+  synthesized_code?: string | null;
+  final_code?: string | null;
+  // Multi-file output — null/undefined when result is a single file
+  code_files?: CodeFile[] | null;
 }
 
 export interface WebSocketMessage {

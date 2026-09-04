@@ -13,12 +13,15 @@ from app.config import get_settings
 from app.core.circuit_breaker import get_circuit_breaker
 from app.core.constants import (
     DEFAULT_MODEL_TIMEOUT,
+    GEMINI_TASK_MODEL_MAP,
+    OPENROUTER_TASK_MODEL_MAP,
     PROVIDER_MODELS,
     REASONING_MODEL_TIMEOUT,
     TASK_TYPE_MODEL_MAP,
+    ModelProvider,
+    TaskType,
 )
 from app.core.exceptions import CircuitBreakerOpenError, ModelUnavailableError
-from app.models.enums import ModelProvider, TaskType
 
 logger = structlog.get_logger(__name__)
 
@@ -44,11 +47,12 @@ class ModelRouterService:
         self.circuit_breaker = get_circuit_breaker()
         self._model_stats: dict[str, ModelStats] = defaultdict(ModelStats)
         self._provider_priority: dict[ModelProvider, int] = {
-            ModelProvider.ANTHROPIC: 1,
-            ModelProvider.OPENAI: 2,
-            ModelProvider.QWEN: 3,
-            ModelProvider.GEMINI: 4,
-            ModelProvider.KIMI: 5,
+            ModelProvider.GEMINI: 1,      # Primary: gemini-3.5-flash-lite, free quota
+            ModelProvider.OPENROUTER: 2,
+            ModelProvider.ANTHROPIC: 3,
+            ModelProvider.OPENAI: 4,
+            ModelProvider.QWEN: 5,
+            ModelProvider.KIMI: 6,
         }
         
         # Ollama client (for free local inference)
@@ -68,8 +72,20 @@ class ModelRouterService:
             ModelProvider.KIMI: "mistral:7b",  # Fallback if Kimi not available locally
         }
 
-    def _get_model_for_provider(self, provider: ModelProvider) -> str:
-        """Get the best model name for a provider."""
+    def _get_model_for_provider(
+        self, provider: ModelProvider, task_type: TaskType | None = None
+    ) -> str:
+        """Get the best model name for a provider.
+
+        For OPENROUTER, picks the task-specific free-tier model when a
+        ``task_type`` is supplied; falls back to the primary list entry.
+        """
+        if provider == ModelProvider.GEMINI and task_type is not None:
+            return GEMINI_TASK_MODEL_MAP.get(task_type, "gemini-3.5-flash-lite")
+
+        if provider == ModelProvider.OPENROUTER and task_type is not None:
+            return OPENROUTER_TASK_MODEL_MAP.get(task_type, "free")
+
         models = PROVIDER_MODELS.get(provider, [])
         if not models:
             raise ModelUnavailableError(
@@ -80,7 +96,16 @@ class ModelRouterService:
         return models[0]  # Return primary model
 
     def _map_provider_to_litellm(self, provider: ModelProvider, model: str) -> str:
-        """Map provider and model to LiteLLM format."""
+        """Map provider and model to LiteLLM format.
+
+        OpenRouter free-tier models are addressed as ``openrouter/<full-slug>``.
+        LiteLLM reads OPENROUTER_API_KEY from the environment automatically.
+        """
+        if provider == ModelProvider.OPENROUTER:
+            # LiteLLM OpenRouter prefix: openrouter/<model-slug>
+            # e.g. openrouter/poolside/laguna-m.1:free
+            return f"openrouter/{model}"
+
         provider_model_map = {
             ModelProvider.OPENAI: f"openai/{model}",
             ModelProvider.ANTHROPIC: f"anthropic/{model}",
@@ -143,6 +168,7 @@ class ModelRouterService:
         temperature: float = 0.7,
         timeout: int | None = None,
         use_local: bool = False,
+        task_type: TaskType | None = None,
     ) -> dict[str, Any]:
         """Execute a completion with a specific model.
 
@@ -168,14 +194,15 @@ class ModelRouterService:
         # Check circuit breaker for cloud models
         await self.circuit_breaker.check_and_raise(provider.value)
 
-        model_name = self._get_model_for_provider(provider)
+        model_name = self._get_model_for_provider(provider, task_type)
         litellm_model = self._map_provider_to_litellm(provider, model_name)
 
-        # Determine timeout
+        # Determine timeout — Gemini, Anthropic and OpenAI all need the longer
+        # 120-second window for code generation tasks.
         if timeout is None:
             timeout = (
                 REASONING_MODEL_TIMEOUT
-                if provider in [ModelProvider.ANTHROPIC, ModelProvider.OPENAI]
+                if provider in [ModelProvider.GEMINI, ModelProvider.ANTHROPIC, ModelProvider.OPENAI]
                 else DEFAULT_MODEL_TIMEOUT
             )
 
@@ -186,7 +213,6 @@ class ModelRouterService:
             response = await acompletion(
                 model=litellm_model,
                 messages=messages,
-                max_tokens=max_tokens,
                 temperature=temperature,
                 request_timeout=timeout,
             )

@@ -4,7 +4,7 @@ You are an expert software requirements analyst. Analyze the user's coding reque
 Analyze the following user request and output a JSON object matching the IntentAnalysis schema.
 
 ## User Request
-{user_query}
+{query}
 
 ## Context (if provided)
 {context}

@@ -22,7 +22,11 @@ class IntentParserService:
         """Initialize intent parser service."""
         self.settings = get_settings()
         self.prompt_template = self._load_prompt_template()
-        self.redis = redis.from_url(self.settings.redis_url, decode_responses=True)
+        # Upstash uses rediss:// (TLS). On Windows, ssl_cert_reqs=None skips cert
+        # verification which is required for Upstash's self-signed chain on Windows.
+        _redis_url = str(self.settings.redis_url)
+        _ssl_kwargs: dict = {"ssl_cert_reqs": None} if _redis_url.startswith("rediss://") else {}
+        self.redis = redis.from_url(_redis_url, decode_responses=True, **_ssl_kwargs)
 
     def _load_prompt_template(self) -> str:
         """Load the intent analysis prompt template."""
@@ -206,16 +210,20 @@ Output ONLY valid JSON, no markdown or explanations."""
     async def _call_cloud_llm(self, prompt: str) -> str:
         """Call cloud LLM for intent analysis.
 
+        Routes through OpenRouter free-tier by default.
+        Uses openrouter/auto so OpenRouter picks the best available free model.
+
         Args:
             prompt: The prompt to send.
 
         Returns:
             Response content string.
         """
+        # gemini/gemini-3.5-flash-lite — LiteLLM reads GEMINI_API_KEY from the environment.
+        # No max_tokens limit so the model returns a complete JSON response.
         response = await acompletion(
-            model="gpt-4o",
+            model="gemini/gemini-3.5-flash-lite",
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=1000,
             temperature=0.3,
         )
         return response.choices[0].message.content.strip()

@@ -18,6 +18,7 @@ export function useWebSocket(taskId: string | null): UseWebSocketReturn {
   const reconnectAttemptsRef = useRef(0);
   const heartbeatIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const isDoneRef = useRef(false);
 
   const cleanup = useCallback(() => {
     if (heartbeatIntervalRef.current) {
@@ -41,11 +42,15 @@ export function useWebSocket(taskId: string | null): UseWebSocketReturn {
       return;
     }
 
+    isDoneRef.current = false;
     cleanup();
     setConnectionStatus('connecting');
 
-    const baseUrl = getBackendUrl().replace('http://', 'ws://').replace('https://', 'wss://');
-    const wsUrl = `${baseUrl}/ws/${taskId}`;
+    const stored = getBackendUrl();
+    const wsBase = stored
+      ? stored.replace('http://', 'ws://').replace('https://', 'wss://')
+      : `ws://${window.location.host}`;
+    const wsUrl = `${wsBase}/api/v1/ws/${taskId}`;
 
     try {
       const ws = new WebSocket(wsUrl);
@@ -66,6 +71,16 @@ export function useWebSocket(taskId: string | null): UseWebSocketReturn {
       ws.onmessage = (event) => {
         try {
           const message: WebSocketMessage = JSON.parse(event.data);
+          // 'completed' and 'failed' are the two terminal types the backend
+          // sends (matching the raw DB status).  'error' covers any other
+          // fatal WS-level error.  All three must stop reconnection.
+          if (
+            message.type === 'completed' ||
+            message.type === 'failed' ||
+            message.type === 'error'
+          ) {
+            isDoneRef.current = true;
+          }
           setLastMessage(message);
         } catch (e) {
           console.error('Failed to parse WebSocket message:', e);
@@ -79,13 +94,14 @@ export function useWebSocket(taskId: string | null): UseWebSocketReturn {
       ws.onclose = () => {
         setConnectionStatus('closed');
         cleanup();
-        
+        if (isDoneRef.current) return;   // task is done; no reconnect needed
+
         // Attempt reconnection with exponential backoff
         const attempt = reconnectAttemptsRef.current;
         if (attempt < WS_RECONNECT_INTERVALS.length) {
           const delay = WS_RECONNECT_INTERVALS[attempt];
           reconnectAttemptsRef.current += 1;
-          
+
           reconnectTimeoutRef.current = setTimeout(() => {
             connect();
           }, delay);

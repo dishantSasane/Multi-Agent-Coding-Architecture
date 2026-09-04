@@ -1,3 +1,50 @@
-python
-langchain
-langgraph
+# CodeForge - Complete Requirements
+# Generated from actual project imports
+
+# Web Framework
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+starlette==0.41.3
+
+# Database
+sqlalchemy==2.0.36
+asyncpg==0.30.0
+alembic==1.14.0
+
+# Pydantic & Settings
+pydantic==2.10.3
+pydantic-settings==2.6.1
+
+# HTTP Clients
+httpx==0.28.1
+aiohttp==3.11.10
+
+# LLM
+litellm==1.55.8
+
+# Celery & Redis
+celery[redis]==5.4.0
+redis==5.2.1
+kombu==5.4.2
+billiard==4.2.1
+amqp==5.3.1
+vine==5.1.0
+flower==2.0.1
+
+# LangChain
+langchain==0.3.13
+langgraph==0.2.60
+
+# Docker SDK (for sandbox)
+docker==7.1.0
+
+# Retry logic
+tenacity==9.0.0
+
+# Logging
+structlog==24.4.0
+
+# Security & Utils
+python-dotenv==1.0.1
+pytest==8.3.4
+pytest-asyncio==0.24.0

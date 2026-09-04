@@ -7,6 +7,7 @@ from app.api.v1.endpoints import (
     generation_router,
     query_router,
     status_router,
+    websocket_router,
 )
 
 api_router = APIRouter()
@@ -34,4 +35,9 @@ api_router.include_router(
     status_router,
     prefix="/query/{task_id}",
     tags=["Status"],
+)
+
+api_router.include_router(
+    websocket_router,
+    tags=["WebSocket"],
 )

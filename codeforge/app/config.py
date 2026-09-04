@@ -1,5 +1,6 @@
 """Application configuration using Pydantic Settings."""
 
+import os
 from functools import lru_cache
 from typing import Any
 
@@ -30,17 +31,22 @@ class Settings(BaseSettings):
     )
 
     # LLM API Keys
+    openrouter_api_key: str | None = Field(default=None, description="OpenRouter API key (free tier supported)")
     openai_api_key: str | None = Field(default=None, description="OpenAI API key")
     anthropic_api_key: str | None = Field(default=None, description="Anthropic API key")
     kimi_api_key: str | None = Field(default=None, description="Kimi API key")
     qwen_api_key: str | None = Field(default=None, description="Qwen API key")
     gemini_api_key: str | None = Field(default=None, description="Gemini API key")
 
+    # OpenAI-compatible base URL override (e.g. https://openrouter.ai/api/v1)
+    openai_api_base: str | None = Field(default=None, description="Override OpenAI base URL")
+
     # LiteLLM
     litellm_master_key: str = Field(default="your-master-key", description="LiteLLM master key")
     litellm_salt_key: str = Field(default="your-salt-key", description="LiteLLM salt key")
 
     # Sandbox Configuration
+    sandbox_enabled: bool = Field(default=True, description="Enable Docker sandbox execution (set False to skip)")
     sandbox_timeout: int = Field(default=30, ge=1, le=300, description="Sandbox execution timeout in seconds")
     sandbox_memory_limit: str = Field(default="512m", description="Sandbox memory limit")
     sandbox_cpu_limit: float = Field(default=1.0, ge=0.1, le=4.0, description="Sandbox CPU limit")
@@ -86,12 +92,22 @@ class Settings(BaseSettings):
     def llm_api_keys(self) -> dict[str, str | None]:
         """Return dictionary of all LLM API keys."""
         return {
+            "openrouter": self.openrouter_api_key,
             "openai": self.openai_api_key,
             "anthropic": self.anthropic_api_key,
             "kimi": self.kimi_api_key,
             "qwen": self.qwen_api_key,
             "gemini": self.gemini_api_key,
         }
+
+    # CORS
+    cors_origins: list[str] = Field(
+        default=["http://localhost:5173", "http://localhost:3000", "*"],
+        description="Allowed CORS origins",
+    )
+
+    # Debug mode
+    debug: bool = Field(default=False, description="Enable debug mode")
 
     def get_enabled_providers(self) -> list[str]:
         """Return list of providers with configured API keys."""
@@ -102,3 +118,29 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     """Get cached settings instance."""
     return Settings()
+
+
+# Module-level singleton for convenience imports
+settings = get_settings()
+
+
+def _export_llm_keys_to_env(s: Settings) -> None:
+    """Write LLM API keys from pydantic-settings into os.environ.
+
+    pydantic-settings reads .env into the Settings object but does NOT
+    populate os.environ. LiteLLM reads keys directly from os.environ, so
+    we bridge the gap here for every configured provider.
+    """
+    key_map = {
+        "GEMINI_API_KEY":     s.gemini_api_key,
+        "OPENROUTER_API_KEY": s.openrouter_api_key,
+        "OPENAI_API_KEY":     s.openai_api_key,
+        "ANTHROPIC_API_KEY":  s.anthropic_api_key,
+    }
+    for env_var, value in key_map.items():
+        if value and not os.environ.get(env_var):
+            os.environ[env_var] = value
+
+
+# Export API keys so LiteLLM can read them at import time
+_export_llm_keys_to_env(settings)

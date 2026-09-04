@@ -1,6 +1,7 @@
 """Orchestrator Service - Main state machine coordinating all services."""
 
 import asyncio
+import re
 from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
@@ -18,7 +19,8 @@ from app.core.exceptions import (
 )
 from app.models.database import get_session_maker
 from app.models.enums import ConfirmationStatusEnum, TaskStatusEnum
-from app.models.models import IntentAnalysis, Task
+from app.models.models import DebateResult, IntentAnalysis, ModelOutput
+from app.models.orm_models import Task
 from app.services.debate_engine import DebateEngineService
 from app.services.ensemble import EnsembleService
 from app.services.fallback import FallbackService
@@ -260,8 +262,6 @@ class OrchestratorService:
 
             try:
                 # Load model outputs
-                from app.models.models import ModelOutput
-
                 outputs = [
                     ModelOutput(**o) for o in (task.model_outputs or [])
                 ]
@@ -319,13 +319,11 @@ class OrchestratorService:
             best = self._heuristic_vote(outputs)
 
             # Store as pseudo-debate result for compatibility
-            from app.models.models import DebateResult
-
             task.debate_result = DebateResult(
                 winner_provider=best.provider,
-                winner_model=best.model_name,
                 consensus_reached=True,
-                scores={"heuristic": 1.0},
+                synthesis_required=False,
+                scores={best.provider: {"correctness": 7.0, "security": 7.0, "performance": 7.0, "maintainability": 7.0}},
                 critiques=["Selected via heuristic voting (token-optimized mode)"],
             ).model_dump()
 
@@ -402,8 +400,6 @@ class OrchestratorService:
 
             try:
                 # Load data
-                from app.models.models import DebateResult, ModelOutput
-
                 outputs = [
                     ModelOutput(**o) for o in (task.model_outputs or [])
                 ]
@@ -420,6 +416,8 @@ class OrchestratorService:
                 task.known_limitations = "\n".join(
                     synthesis_result.get("known_limitations", [])
                 )
+                # Parse multi-file output; None → single file (frontend falls back)
+                task.code_files = self._parse_code_files(synthesis_result["code"])
                 await session.commit()
 
                 logger.info(
@@ -470,8 +468,28 @@ class OrchestratorService:
                 if self.validator.all_passed(validation_results):
                     task.status = TaskStatusEnum.SANDBOX_EXECUTING
                 else:
-                    task.status = TaskStatusEnum.CORRECTING
-                    task.correction_attempts += 1
+                    # Belt-and-suspenders: if the *only* failing stage is
+                    # import_resolution on a multi-file code block, treat as
+                    # passed and skip self-correction entirely.  The validator
+                    # already returns passed=True for this case via
+                    # _is_multi_file_block(), but guard here too so the
+                    # correction loop never wastes API quota on it.
+                    failing = [r for r in validation_results if not r.passed]
+                    code = task.synthesized_code or ""
+                    only_multi_file_import = (
+                        len(failing) == 1
+                        and failing[0].stage == "import_resolution"
+                        and ValidatorService._is_multi_file_block(code)
+                    )
+                    if only_multi_file_import:
+                        logger.info(
+                            "skipping_correction_multi_file_import",
+                            task_id=str(task_id),
+                        )
+                        task.status = TaskStatusEnum.SANDBOX_EXECUTING
+                    else:
+                        task.status = TaskStatusEnum.CORRECTING
+                        task.correction_attempts += 1
 
                 await session.commit()
 
@@ -599,18 +617,47 @@ class OrchestratorService:
                             last_error="Validation failed after all corrections",
                         )
 
-            # Step 7: Execute in sandbox
-            await self.execute_in_sandbox(task_id)
+            # Step 7: Execute in sandbox (or skip when SANDBOX_ENABLED=False)
+            if not self.settings.sandbox_enabled:
+                # Mark complete directly — no Docker required.
+                async with self.session_maker() as session:
+                    task = await self._get_task(session, task_id)
+                    if task:
+                        task.status = TaskStatusEnum.COMPLETED
+                        task.final_code = task.synthesized_code
+                        task.completed_at = datetime.now(timezone.utc)
+                        task.sandbox_results = {
+                            "success": True,
+                            "skipped": True,
+                            "reason": "SANDBOX_ENABLED=False",
+                        }
+                        await session.commit()
+                logger.info("sandbox_step_skipped", task_id=str(task_id))
+            else:
+                await self.execute_in_sandbox(task_id)
 
             logger.info("pipeline_complete", task_id=str(task_id))
 
             async with self.session_maker() as session:
                 task = await self._get_task(session, task_id)
-                return task or Task()
+                if task is None:
+                    raise TaskNotFoundError(str(task_id))
+                return task
 
         except Exception as e:
             logger.exception("pipeline_failed", error=str(e))
             raise
+
+    async def trigger_generation(self, task_id: UUID) -> Task:
+        """Trigger code generation for a confirmed task (alias for generate_code).
+
+        Args:
+            task_id: Task UUID.
+
+        Returns:
+            Updated Task after generation stage.
+        """
+        return await self.generate_code(task_id)
 
     async def _get_task(
         self, session: AsyncSession, task_id: UUID
@@ -628,6 +675,34 @@ class OrchestratorService:
             select(Task).where(Task.id == task_id)
         )
         return result.scalar_one_or_none()
+
+    # Multi-file framework heuristics -----------------------------------------
+    _MULTI_FILE_FRAMEWORKS = frozenset({"fastapi", "django", "flask", "starlette"})
+    _MULTI_FILE_KEYWORDS = re.compile(
+        r"\b(separate files?|multiple files?|models?\.py|routes?\.py|views?\.py|"
+        r"main\.py|database\.py|schemas?\.py|crud\.py|app\.py)\b",
+        re.IGNORECASE,
+    )
+
+    def _needs_multi_file_prompt(
+        self, task: Task, intent: IntentAnalysis | None
+    ) -> bool:
+        """Return True when the request is likely a multi-file project."""
+        query = task.user_query or ""
+        if self._MULTI_FILE_KEYWORDS.search(query):
+            return True
+        if intent:
+            # Tech stack mentions a framework that conventionally uses multiple files
+            stack_lower = {s.lower() for s in intent.tech_stack}
+            if stack_lower & self._MULTI_FILE_FRAMEWORKS:
+                return True
+            # Any requirement mentions a .py filename
+            all_req = " ".join(intent.requirements)
+            if re.search(r"\w+\.py", all_req):
+                return True
+            if "multi-file" in all_req.lower() or "multi-file" in intent.summary.lower():
+                return True
+        return False
 
     def _build_generation_prompt(
         self,
@@ -668,6 +743,30 @@ class OrchestratorService:
         lines.append("- Consider security implications")
         lines.append("- NO placeholder code or TODOs")
 
+        # Inject multi-file formatting requirement when applicable
+        if self._needs_multi_file_prompt(task, intent):
+            lines.append(
+                "\n\nCRITICAL FORMATTING REQUIREMENT — MULTI-FILE PROJECT:\n"
+                "You MUST generate each file separately using this EXACT separator format:\n"
+                "\n"
+                "# ==================== filename.py ====================\n"
+                "\n"
+                "<complete file content here>\n"
+                "\n"
+                "# ==================== filename2.py ====================\n"
+                "\n"
+                "<complete file content here>\n"
+                "\n"
+                "Rules for multi-file output:\n"
+                "- Every file MUST start with the separator comment\n"
+                "- Use the EXACT format: # ==================== filename.py ====================\n"
+                "- Generate COMPLETE file content — no placeholders, no 'see above', no truncation\n"
+                "- Each file must be fully self-contained and runnable\n"
+                "- Include ALL imports in each file\n"
+                "- Do NOT combine files into one block\n"
+                "- Generate ALL requested files (models.py, routes.py, database.py, main.py etc.)"
+            )
+
         return "\n".join(lines)
 
     def _get_system_prompt(self) -> str:
@@ -685,7 +784,46 @@ Your code is always:
 - Handles all edge cases
 - Includes proper error handling
 
-Never use placeholders or TODOs. Always write complete, working solutions."""
+Never use placeholders or TODOs. Always write complete, working solutions.
+
+For multi-file projects, always separate files using:
+# ==================== filename.py ====================
+<complete file content>
+
+Never truncate or skip files. Generate complete content for every file."""
+
+    @staticmethod
+    def _parse_code_files(code: str) -> list[dict] | None:
+        """Split a multi-file code block into individual file entries.
+
+        Detects the separator pattern::
+
+            # ==================== filename.py ====================
+
+        If at least two files are found, returns a list of dicts::
+
+            [{"filename": "models.py", "content": "..."}, ...]
+
+        Returns ``None`` for single-file output so the frontend falls back to
+        its existing plain code-block display.
+        """
+        # Match: # ====...==== filename.py ====...====
+        # At least 10 '=' characters on each side; filename may include path separators.
+        pattern = r"#\s*={10,}\s+([\w./\-]+\.\w+)\s*={10,}"
+        parts = re.split(pattern, code)
+
+        # parts = [preamble, filename1, content1, filename2, content2, ...]
+        if len(parts) <= 1:
+            return None  # no separators found
+
+        files: list[dict] = []
+        for i in range(1, len(parts), 2):
+            filename = parts[i].strip()
+            content = parts[i + 1].strip() if i + 1 < len(parts) else ""
+            if content:
+                files.append({"filename": filename, "content": content})
+
+        return files if len(files) >= 2 else None
 
 
 # Global orchestrator instance

@@ -17,13 +17,28 @@ logger = structlog.get_logger(__name__)
 
 
 class SandboxService:
-    """Service for executing code in secure Docker containers."""
+    """Service for executing code in secure Docker containers.
+
+    When ``settings.sandbox_enabled`` is ``False`` the Docker client is never
+    created and all execution calls return a skipped-result immediately.
+    """
 
     def __init__(self) -> None:
         """Initialize sandbox service."""
         self.settings = get_settings()
-        self.client = docker.from_env()
         self._cleanup_lock = asyncio.Lock()
+
+        # Lazy Docker init — only connect when sandbox is actually enabled.
+        self.client = None
+        if self.settings.sandbox_enabled:
+            try:
+                self.client = docker.from_env()
+            except Exception as exc:
+                logger.warning(
+                    "docker_unavailable",
+                    error=str(exc),
+                    hint="Set SANDBOX_ENABLED=False in .env to suppress this warning.",
+                )
 
     async def execute_python(
         self,
@@ -44,6 +59,19 @@ class SandboxService:
         Raises:
             SandboxExecutionError: If execution fails.
         """
+        # Bypass Docker entirely when sandbox is disabled.
+        if not self.settings.sandbox_enabled or self.client is None:
+            logger.info("sandbox_skipped", reason="SANDBOX_ENABLED=False")
+            return {
+                "success": True,
+                "exit_code": 0,
+                "stdout": "",
+                "stderr": "",
+                "execution_time_ms": 0,
+                "timeout": False,
+                "skipped": True,
+            }
+
         timeout = timeout or self.settings.sandbox_timeout
 
         logger.info("executing_in_sandbox", timeout=timeout)
@@ -92,8 +120,9 @@ class SandboxService:
         Returns:
             Execution results.
         """
+        import time
         container = None
-        start_time = asyncio.get_event_loop().time()
+        start_time = time.time()
 
         try:
             # Create temporary file with script
@@ -122,7 +151,7 @@ class SandboxService:
                 "exit_code": 0,
                 "stdout": container.decode("utf-8") if isinstance(container, bytes) else str(container),
                 "stderr": "",
-                "execution_time_ms": int((asyncio.get_event_loop().time() - start_time) * 1000),
+                "execution_time_ms": int((time.time() - start_time) * 1000),
                 "timeout": False,
             }
 
@@ -134,7 +163,7 @@ class SandboxService:
                 "exit_code": e.exit_status,
                 "stdout": "",
                 "stderr": e.stderr.decode("utf-8") if e.stderr else str(e),
-                "execution_time_ms": int((asyncio.get_event_loop().time() - start_time) * 1000),
+                "execution_time_ms": int((time.time() - start_time) * 1000),
                 "timeout": False,
                 "error_message": str(e),
             }

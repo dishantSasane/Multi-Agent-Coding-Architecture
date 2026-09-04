@@ -2,9 +2,49 @@
 
 import ast
 import asyncio
+import sys
 from typing import Any
 
 import structlog
+
+# ---------------------------------------------------------------------------
+# Known-good module set — imports whose top-level name is in this set will
+# be validated; single-word names NOT in this set are assumed to be local
+# project files and are silently skipped.
+#
+# Contains: Python stdlib (sys.stdlib_module_names on 3.10+, else a curated
+# fallback) PLUS common installed packages that are almost always present in
+# the generated code's runtime environment.
+# ---------------------------------------------------------------------------
+_KNOWN_MODULES: frozenset[str] = (
+    getattr(sys, "stdlib_module_names", None)
+    or (
+        frozenset(sys.builtin_module_names)
+        | {
+            "abc", "argparse", "array", "ast", "asyncio", "base64", "bisect",
+            "codecs", "collections", "concurrent", "configparser", "contextlib",
+            "copy", "csv", "ctypes", "dataclasses", "datetime", "decimal",
+            "difflib", "dis", "email", "enum", "fractions", "functools", "glob",
+            "gzip", "hashlib", "heapq", "hmac", "html", "http", "importlib",
+            "inspect", "io", "itertools", "json", "locale", "logging", "math",
+            "multiprocessing", "numbers", "operator", "os", "pathlib", "pickle",
+            "platform", "pprint", "queue", "random", "re", "reprlib", "select",
+            "shelve", "shutil", "signal", "socket", "sqlite3", "statistics",
+            "string", "struct", "subprocess", "sys", "tarfile", "tempfile",
+            "textwrap", "threading", "time", "traceback", "typing", "unicodedata",
+            "unittest", "urllib", "uuid", "warnings", "weakref", "xml", "zipfile",
+            "zlib", "gettext",
+        }
+    )
+    # Well-known installed packages that appear frequently in generated code.
+    | {
+        "fastapi", "sqlalchemy", "pydantic", "celery", "redis", "httpx",
+        "aiohttp", "starlette", "uvicorn", "alembic", "flask", "django",
+        "requests", "aiofiles", "structlog", "pytest", "anyio", "click",
+        "cryptography", "jose", "passlib", "bcrypt", "boto3", "botocore",
+        "yaml", "toml", "dotenv", "PIL", "numpy", "pandas", "scipy",
+    }
+)
 
 from app.config import get_settings
 from app.core.exceptions import ValidationError
@@ -174,8 +214,52 @@ class ValidatorService:
             duration_ms=int((time.time() - start) * 1000),
         )
 
+    @staticmethod
+    def _should_validate_module(module_name: str) -> bool:
+        """Return True if *module_name* should be import-validated.
+
+        Rules:
+        - Multi-part names (contain a dot) → always validate, e.g. ``sqlalchemy.orm``.
+        - Single-word names in the known-modules set → validate (stdlib / common pkg).
+        - Single-word names NOT in the set → skip; they are local project files
+          such as ``database``, ``models``, ``routes``, ``config``.
+        """
+        if not module_name:
+            return False
+        if "." in module_name:
+            return True
+        return module_name in _KNOWN_MODULES
+
+    @staticmethod
+    def _is_multi_file_block(code: str) -> bool:
+        """Return True when *code* looks like a multi-file code block.
+
+        Multi-file blocks (e.g. LLM output that concatenates several files
+        separated by comments) cannot be validated as a single module.
+        Heuristics used:
+          - A ``# <name>.py`` filename comment appears at least once
+          - A ``# ---`` / ``# ===`` section-separator comment appears
+          - ``if __name__ == "__main__":`` appears more than once
+        Any single match is enough to skip import-resolution.
+        """
+        import re
+
+        # e.g.  "# models.py"  or  "# utils/helpers.py"
+        if re.search(r"#\s+\w[\w/]*\.py\b", code):
+            return True
+        # e.g.  "# ---" / "# ===" / "# ----"
+        if re.search(r"#\s*[-=]{3,}", code):
+            return True
+        # Multiple entry-point guards  → concatenated scripts
+        if code.count('if __name__') > 1:
+            return True
+        return False
+
     async def _validate_imports(self, code: str) -> ValidationResult:
         """Validate that imports can be resolved.
+
+        Skipped automatically for multi-file code blocks — import paths that
+        span multiple files will always fail single-module resolution.
 
         Args:
             code: Code to validate.
@@ -188,13 +272,23 @@ class ValidatorService:
         start = time.time()
         errors = []
 
+        # Multi-file blocks cannot be validated as a single module.
+        if self._is_multi_file_block(code):
+            return ValidationResult(
+                stage="import_resolution",
+                passed=True,
+                warnings=["Skipped: multi-file code block detected"],
+                duration_ms=int((time.time() - start) * 1000),
+            )
+
         try:
             tree = ast.parse(code)
 
             for node in ast.walk(tree):
                 if isinstance(node, ast.Import):
                     for alias in node.names:
-                        # Try to import
+                        if not self._should_validate_module(alias.name):
+                            continue
                         try:
                             __import__(alias.name.split(".")[0])
                         except ImportError:
@@ -202,6 +296,8 @@ class ValidatorService:
 
                 elif isinstance(node, ast.ImportFrom):
                     if node.module:
+                        if not self._should_validate_module(node.module):
+                            continue
                         try:
                             __import__(node.module.split(".")[0])
                         except ImportError:

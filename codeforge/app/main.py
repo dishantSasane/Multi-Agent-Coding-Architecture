@@ -77,10 +77,21 @@ def create_app() -> FastAPI:
     )
     
     # Add middleware
-    app.add_middleware(CorrelationIDMiddleware)
+    # app.add_middleware(CorrelationIDMiddleware)
+
+    # Build CORS origin list: always include the known dev-server origins;
+    # also include anything from settings, but strip bare "*" — it is
+    # incompatible with allow_credentials=True (browser rejects it).
+    _cors_origins = list({
+        "http://localhost:5173",
+        "http://localhost:3000",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:3000",
+        *[o for o in settings.cors_origins if o != "*"],
+    })
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=settings.cors_origins,
+        allow_origins=_cors_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -89,10 +100,17 @@ def create_app() -> FastAPI:
     # Include API router
     app.include_router(api_router, prefix="/api/v1")
     
-    # Health check endpoint
+    # Health check endpoints — both paths needed:
+    # /health       → direct backend hit (e.g. curl)
+    # /api/v1/health → through Vite proxy (frontend testConnection call)
     @app.get("/health")
     async def health_check() -> dict[str, str]:
         """Health check endpoint."""
+        return {"status": "healthy"}
+
+    @app.get("/api/v1/health")
+    async def health_check_v1() -> dict[str, str]:
+        """Health check via /api/v1 prefix (used by frontend through Vite proxy)."""
         return {"status": "healthy"}
     
     # Exception handlers
@@ -162,10 +180,25 @@ def create_app() -> FastAPI:
         exc: Exception,
     ) -> JSONResponse:
         """Handle unexpected exceptions."""
+        import traceback
+
+        tb = traceback.format_exc()
+        traceback.print_exc()  # always print to uvicorn terminal for debugging
         logger.exception(
             f"Unexpected error: {exc}",
             correlation_id=getattr(request.state, "correlation_id", None),
         )
+        # In DEBUG mode surface the real error so it appears in HTTP responses
+        # (not just buried in the uvicorn terminal).
+        if settings.debug:
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "detail": str(exc),
+                    "error_type": type(exc).__name__,
+                    "traceback": tb,
+                },
+            )
         return JSONResponse(
             status_code=500,
             content={"detail": "Internal server error", "error_type": "InternalServerError"},

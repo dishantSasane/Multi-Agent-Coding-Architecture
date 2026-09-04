@@ -7,17 +7,16 @@ from app.models.models import (
     DebateResult,
     ErrorResponse,
     IntentAnalysis,
-    ModelCall,
     ModelOutput,
     ProgressUpdate,
     QueryRequest,
     SandboxResult,
-    Task,
     TaskResult,
     TaskStatusResponse,
     ValidationResult,
     WSMessage,
 )
+from app.models.orm_models import ModelCall, Task
 
 __all__ = [
     # Database

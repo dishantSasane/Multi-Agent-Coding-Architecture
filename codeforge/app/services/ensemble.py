@@ -44,8 +44,9 @@ class EnsembleService:
         logger.info("generating_ensemble", size=self.ensemble_size)
 
         if providers is None:
-            # Token-optimized: use only 2 high-quality models
-            providers = [ModelProvider.QWEN, ModelProvider.KIMI]
+            # Use Gemini exclusively — GEMINI_API_KEY is the configured provider.
+            # Set DEFAULT_ENSEMBLE_SIZE=1 in .env for a single call (recommended).
+            providers = [ModelProvider.GEMINI] * max(1, self.ensemble_size)
 
         messages = []
         if system_prompt:
@@ -97,7 +98,6 @@ class EnsembleService:
                 self.router.execute_with_model(
                     provider=provider,
                     messages=messages,
-                    max_tokens=4000,
                     temperature=0.7,
                 ),
                 timeout=timeout_seconds,
