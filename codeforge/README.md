@@ -16,7 +16,7 @@ real-time progress to a React dashboard via WebSocket.
 | ORM / DB driver | SQLAlchemy 2 async + asyncpg |
 | Database | Neon cloud Postgres (serverless) |
 | Broker / cache | Upstash cloud Redis (TLS `rediss://`) |
-| LLM gateway | LiteLLM → Gemini / OpenRouter / Anthropic |
+| LLM gateway | LiteLLM → Groq / OpenRouter / Anthropic |
 | Sandbox | Docker-in-Docker (optional) |
 | Frontend | React 18 + Vite + TypeScript |
 | Real-time | WebSocket (FastAPI native) |
@@ -38,7 +38,7 @@ Intent Analysis → Task Decomposition → Model Routing →
 | Python | 3.11 |
 | Node.js | 18 + |
 | conda | any recent |
-| Gemini API key | minimum required LLM key |
+| Groq API key | minimum required LLM key |
 | Docker Desktop | only if `SANDBOX_ENABLED=true` or using Docker Compose |
 
 ---
@@ -71,7 +71,7 @@ cd ..
 ```bash
 cp codeforge/.env.example codeforge/.env
 # Open codeforge/.env and fill in DATABASE_URL, REDIS_URL,
-# CELERY_BROKER_URL, CELERY_RESULT_BACKEND, and at least GEMINI_API_KEY
+# CELERY_BROKER_URL, CELERY_RESULT_BACKEND, and at least GROQ_API_KEY
 ```
 
 ### 5. Start the backend API
@@ -146,7 +146,8 @@ docker compose down
 | `REDIS_URL` | ✅ | Upstash Redis TLS URL (`rediss://`) |
 | `CELERY_BROKER_URL` | ✅ | Celery broker — same Redis, db `/0` |
 | `CELERY_RESULT_BACKEND` | ✅ | Celery results — same Redis, db `/1` |
-| `GEMINI_API_KEY` | ✅ | Primary LLM key |
+| `GROQ_API_KEY` | ✅ | Primary LLM key |
+| `GROQ_MODEL` | optional | Groq model slug (default `openai/gpt-oss-120b`) |
 | `OPENAI_API_KEY` | optional | OpenAI or OpenRouter key |
 | `OPENAI_API_BASE` | optional | Override base URL (e.g. OpenRouter) |
 | `ANTHROPIC_API_KEY` | optional | Anthropic direct key |
@@ -157,7 +158,7 @@ docker compose down
 | `USE_DEBATE_ENGINE` | optional | `true` = run ensemble debate (more quality, more tokens) |
 | `USE_LOCAL_FOR_INTENT` | optional | `true` = use Ollama for intent parsing |
 | `USE_LOCAL_FOR_CORRECTION` | optional | `true` = use Ollama for correction |
-| `MAX_CORRECTION_ATTEMPTS` | optional | Retry limit for correction loop (default `3`) |
+| `MAX_CORRECTION_ATTEMPTS` | optional | Retry limit for correction loop (default `0`) |
 | `DEFAULT_ENSEMBLE_SIZE` | optional | Number of models per ensemble (default `3`) |
 | `SANDBOX_ENABLED` | optional | `false` = skip Docker sandbox (default `false`) |
 | `SANDBOX_TIMEOUT` | optional | Sandbox execution timeout in seconds (default `30`) |
@@ -173,7 +174,7 @@ docker compose down
 
 ## Known Issues
 
-- **Gemini 503 / resource exhausted** — provider rate limit. Wait ~30 s and retry.
+- **Groq provider errors** — check the configured model and account limits.
 - **Model ID drift** — strings in `app/core/constants.py` (e.g. `gemini-3.6-flash`,
   `claude-sonnet-5`) may not match the provider's current API names. Update them if
   you receive "model not found" errors.

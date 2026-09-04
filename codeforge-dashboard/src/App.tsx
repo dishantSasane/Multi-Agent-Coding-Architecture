@@ -87,9 +87,8 @@ function HomePage() {
         setIsLoading(false);
         setWsTaskId(null);
 
-        // Fetch the full task to get the generated code
-        if (type === 'completed') {
-          console.log('[CodeForge] WS completed message received');
+        // Fetch terminal task data so failures expose persisted validation details.
+        if (type === 'completed' || type === 'error') {
           getTaskStatus(taskId)
             .then((full) => {
               const raw = full as unknown as Record<string, unknown>;
@@ -97,17 +96,25 @@ function HomePage() {
               const code =
                 (raw.synthesized_code as string) || (raw.final_code as string) || null;
               const files = (raw.code_files as CodeFile[] | null) || null;
+              const errorLog = raw.error_log as { message?: string } | null;
+              const validationResults = raw.validation_results as Task['validation_results'];
               // 1. Local state — renders immediately without waiting for the store
               setGeneratedCode(code);
-              if (files && files.length >= 2) {
+              if (files && files.length > 0) {
                 setGeneratedFiles(files);
                 setActiveFileIdx(0);
+              }
+              if (errorLog?.message || raw.last_error) {
+                setError(errorLog?.message ?? (raw.last_error as string));
               }
               // 2. Store update — keeps history page / other consumers in sync
               updateTask(taskId, {
                 synthesized_code: (raw.synthesized_code as string) || null,
                 final_code: (raw.final_code as string) || null,
                 code_files: files,
+                validation_results: validationResults,
+                last_error: (raw.last_error as string) || errorLog?.message || null,
+                error: errorLog?.message || (raw.last_error as string) || null,
               });
             })
             .catch((err) => {
@@ -220,10 +227,22 @@ function HomePage() {
               </div>
             )}
 
+            {currentTask.status === 'FAILED' && currentTask.validation_results?.length ? (
+              <div className="bg-rose-950/30 rounded-lg border border-rose-800 p-4 space-y-2">
+                <h3 className="text-sm font-semibold text-rose-300">Validation failed</h3>
+                {currentTask.validation_results.filter((result) => !result.passed).map((result) => (
+                  <div key={result.stage} className="text-sm text-rose-200">
+                    <span className="font-medium">{result.stage}:</span>{' '}
+                    {(result.errors ?? []).join('; ')}
+                  </div>
+                ))}
+              </div>
+            ) : null}
+
             {/* Completed */}
-            {currentTask.status === 'COMPLETED' && (() => {
+            {(currentTask.status === 'COMPLETED' || currentTask.status === 'FAILED') && (() => {
               const codeFiles = generatedFiles ?? currentTask.code_files ?? null;
-              const hasMultipleFiles = codeFiles && codeFiles.length >= 2;
+              const hasStructuredFiles = codeFiles && codeFiles.length > 0;
 
               // ── Download-all-as-ZIP helper (lazy-loads jszip) ──────────────
               const downloadAllAsZip = async () => {
@@ -250,7 +269,7 @@ function HomePage() {
                 URL.revokeObjectURL(url);
               };
 
-              if (hasMultipleFiles) {
+              if (hasStructuredFiles) {
                 const activeFile = codeFiles![activeFileIdx] ?? codeFiles![0];
                 return (
                   <div className="space-y-3">

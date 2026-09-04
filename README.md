@@ -32,7 +32,7 @@ User Query
 External Services (cloud — no local containers required)
   • Neon         → PostgreSQL database
   • Upstash      → Redis (Celery broker + result backend)
-  • Google AI    → Gemini 2.0 Flash Lite (primary LLM)
+  • Groq         → GPT OSS 120B (primary LLM)
   • OpenRouter   → fallback LLMs (optional)
 ```
 
@@ -121,10 +121,10 @@ npm run dev
 
 ## Required API Keys & Services
 
-### 1. Gemini API Key (primary LLM — **required**)
-- Sign up at [aistudio.google.com](https://aistudio.google.com/app/apikey)
-- Free tier: **500 requests/day** on Gemini 2.0 Flash Lite
-- Set `GEMINI_API_KEY` in `.env`
+### 1. Groq API Key (primary LLM — **required**)
+- Sign up at [console.groq.com](https://console.groq.com/keys)
+- Set `GROQ_API_KEY` in `.env`
+- Default model: `openai/gpt-oss-120b` via LiteLLM's `groq/` provider
 
 ### 2. Neon PostgreSQL (**required**)
 - Sign up at [neon.tech](https://neon.tech) — free tier available
@@ -152,7 +152,8 @@ npm run dev
 | `REDIS_URL` | — | Upstash Redis TLS URL |
 | `CELERY_BROKER_URL` | — | Same as `REDIS_URL` |
 | `CELERY_RESULT_BACKEND` | — | Same as `REDIS_URL` |
-| `GEMINI_API_KEY` | — | Google AI Studio key |
+| `GROQ_API_KEY` | — | Groq API key |
+| `GROQ_MODEL` | `openai/gpt-oss-120b` | Groq model slug |
 | `SANDBOX_ENABLED` | `False` | Enable Docker sandbox (needs Docker-in-Docker) |
 | `DEFAULT_ENSEMBLE_SIZE` | `1` | Models to call per query (1 = cheapest) |
 | `USE_DEBATE_ENGINE` | `False` | LLM debate stage (extra API calls) |
@@ -166,7 +167,7 @@ npm run dev
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| `503 Service Unavailable` from Gemini | Daily quota (500 RPD) exhausted | Wait until quota resets, or configure OpenRouter fallback |
+| Groq model error | Model slug or account limits | Check `GROQ_MODEL` and Groq account limits |
 | Each query uses 2 API calls | Intent analysis + code generation | Expected behaviour; set `USE_LOCAL_FOR_INTENT=True` with Ollama to reduce it |
 | `SANDBOX_ENABLED=False` required | No Docker-in-Docker in most envs | Leave `False`; code is validated but not executed |
 | Celery worker shows `connection refused` | Upstash URL missing or wrong | Check `CELERY_BROKER_URL` in `.env`; must be `rediss://` (TLS) |

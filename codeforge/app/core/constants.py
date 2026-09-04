@@ -29,7 +29,7 @@ class ModelProvider(StrEnum):
     ANTHROPIC = "anthropic"
     KIMI = "kimi"
     QWEN = "qwen"
-    GEMINI = "gemini"
+    GROQ = "groq"
 
 
 class TaskType(StrEnum):
@@ -67,7 +67,7 @@ class ConfirmationStatus(StrEnum):
 # Model routing defaults
 DEFAULT_MODEL_TIMEOUT = 30
 REASONING_MODEL_TIMEOUT = 120
-MAX_CORRECTION_ATTEMPTS = 3
+MAX_CORRECTION_ATTEMPTS = 0
 DEFAULT_ENSEMBLE_SIZE = 3
 
 # Circuit breaker defaults
@@ -82,37 +82,26 @@ SANDBOX_CPU_LIMIT = 1.0
 # Validation defaults
 HYPOTHESIS_ITERATIONS = 100
 
-# Task type to model mapping — all tasks route through Gemini.
+# Task type to model mapping — all tasks route through Groq.
 TASK_TYPE_MODEL_MAP: dict[TaskType, ModelProvider] = {
-    TaskType.ARCHITECTURE:   ModelProvider.GEMINI,
-    TaskType.IMPLEMENTATION: ModelProvider.GEMINI,
-    TaskType.ALGORITHM:      ModelProvider.GEMINI,
-    TaskType.DOCUMENTATION:  ModelProvider.GEMINI,
-    TaskType.ANALYSIS:       ModelProvider.GEMINI,
-    TaskType.DEBUGGING:      ModelProvider.GEMINI,
-    TaskType.TESTING:        ModelProvider.GEMINI,
+    TaskType.ARCHITECTURE:   ModelProvider.GROQ,
+    TaskType.IMPLEMENTATION: ModelProvider.GROQ,
+    TaskType.ALGORITHM:      ModelProvider.GROQ,
+    TaskType.DOCUMENTATION:  ModelProvider.GROQ,
+    TaskType.ANALYSIS:       ModelProvider.GROQ,
+    TaskType.DEBUGGING:      ModelProvider.GROQ,
+    TaskType.TESTING:        ModelProvider.GROQ,
 }
 
 # Model names per provider.
-# LiteLLM format for Gemini: "gemini/<model>" — reads GEMINI_API_KEY from env.
+# LiteLLM format for Groq: "groq/<model>" — reads GROQ_API_KEY from env.
 PROVIDER_MODELS: dict[ModelProvider, list[str]] = {
-    ModelProvider.GEMINI:    ["gemini-3.5-flash-lite"],   # primary: fast + free quota
+    ModelProvider.GROQ:      ["openai/gpt-oss-120b"],
     ModelProvider.OPENROUTER: ["free"],
     ModelProvider.OPENAI:    ["gpt-4o", "gpt-4-turbo", "gpt-3.5-turbo"],
     ModelProvider.ANTHROPIC: ["claude-sonnet-5", "claude-opus-5", "claude-haiku-4-5-20251001"],
     ModelProvider.KIMI:      ["kimi-k1.5"],
     ModelProvider.QWEN:      ["qwen-2.5-coder-32b-instruct", "qwen-2.5-72b-instruct"],
-}
-
-# Per-task model slug for Gemini (used by _get_model_for_provider).
-GEMINI_TASK_MODEL_MAP: dict[TaskType, str] = {
-    TaskType.ARCHITECTURE:   "gemini-3.5-flash-lite",
-    TaskType.IMPLEMENTATION: "gemini-3.5-flash-lite",
-    TaskType.ALGORITHM:      "gemini-3.5-flash-lite",
-    TaskType.DOCUMENTATION:  "gemini-3.5-flash-lite",
-    TaskType.ANALYSIS:       "gemini-3.5-flash-lite",
-    TaskType.DEBUGGING:      "gemini-3.5-flash-lite",
-    TaskType.TESTING:        "gemini-3.5-flash-lite",
 }
 
 # Kept for backward-compat import (no longer used for routing).

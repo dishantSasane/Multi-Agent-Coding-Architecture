@@ -115,6 +115,8 @@ export interface TaskResult {
 export interface CodeFile {
   filename: string;
   content: string;
+  language?: string;
+  file_type?: string;
 }
 
 export interface Task {
@@ -135,6 +137,13 @@ export interface Task {
   final_code?: string | null;
   // Multi-file output — null/undefined when result is a single file
   code_files?: CodeFile[] | null;
+  validation_results?: Array<{
+    stage: string;
+    passed: boolean;
+    errors?: string[];
+    warnings?: string[];
+  }> | null;
+  last_error?: string | null;
 }
 
 export interface WebSocketMessage {

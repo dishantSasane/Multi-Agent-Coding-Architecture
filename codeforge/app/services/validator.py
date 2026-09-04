@@ -2,6 +2,7 @@
 
 import ast
 import asyncio
+import re
 import sys
 from typing import Any
 
@@ -49,6 +50,7 @@ _KNOWN_MODULES: frozenset[str] = (
 from app.config import get_settings
 from app.core.exceptions import ValidationError
 from app.models.models import ValidationResult
+from app.services.code_extractor import file_metadata, normalize_filename
 
 logger = structlog.get_logger(__name__)
 
@@ -64,17 +66,34 @@ class ValidatorService:
         self,
         code: str,
         test_code: str | None = None,
+        files: list[dict[str, str]] | None = None,
     ) -> list[ValidationResult]:
         """Run all validation stages.
 
         Args:
             code: Code to validate.
             test_code: Optional test code.
+            files: Optional extracted multi-file representation.
 
         Returns:
             List of validation results for each stage.
         """
-        logger.info("starting_validation")
+        file_map = self._normalize_files(code, files)
+        if not file_map or not any(content.strip() for content in file_map.values()):
+            return [
+                ValidationResult(
+                    stage="generation",
+                    passed=False,
+                    errors=["Generated project is empty"],
+                )
+            ]
+        structured_files = files is not None or len(file_map) > 1
+        logger.info(
+            "starting_validation",
+            file_count=len(file_map),
+            file_paths=list(file_map),
+            code_preview=repr(self._redact_preview(code[:2000])),
+        )
 
         stages = [
             ("syntax", self._validate_syntax),
@@ -86,11 +105,19 @@ class ValidatorService:
         results = []
         for stage_name, stage_func in stages:
             try:
-                result = await stage_func(code)
+                if structured_files:
+                    result = await self._validate_files(stage_name, stage_func, file_map)
+                else:
+                    result = await stage_func(code)
                 results.append(result)
 
                 if not result.passed:
-                    logger.warning("validation_stage_failed", stage=stage_name)
+                    logger.warning(
+                        "validation_stage_failed",
+                        stage=stage_name,
+                        errors=result.errors,
+                        warnings=result.warnings,
+                    )
 
             except Exception as e:
                 logger.exception("validation_stage_error", stage=stage_name, error=str(e))
@@ -108,6 +135,67 @@ class ValidatorService:
             results.append(test_result)
 
         return results
+
+    async def _validate_files(
+        self,
+        stage_name: str,
+        stage_func: Any,
+        files: dict[str, str],
+    ) -> ValidationResult:
+        """Run a validation stage independently for every generated file."""
+        errors: list[str] = []
+        warnings: list[str] = []
+        duration_ms = 0
+
+        for filename, content in files.items():
+            language, _ = file_metadata(filename)
+            if language != "python":
+                continue
+            result = await stage_func(content)
+            duration_ms += result.duration_ms or 0
+            errors.extend(f"{filename}: {error}" for error in result.errors)
+            warnings.extend(f"{filename}: {warning}" for warning in result.warnings)
+
+        return ValidationResult(
+            stage=stage_name,
+            passed=not errors,
+            errors=errors,
+            warnings=warnings,
+            duration_ms=duration_ms,
+        )
+
+    @staticmethod
+    def _normalize_files(
+        code: str,
+        files: list[dict[str, str]] | None,
+    ) -> dict[str, str]:
+        """Return generated Python files, with legacy marker parsing fallback."""
+        if files:
+            return {
+                normalize_filename(item["filename"]): item["content"]
+                for item in files
+                if item.get("filename") and isinstance(item.get("content"), str)
+            }
+
+        pattern = r"^#\s*={10,}\s+([^\s=]+)\s*={10,}\s*$"
+        matches = list(re.finditer(pattern, code, re.MULTILINE))
+        if len(matches) < 2:
+            return {"<generated>.py": code}
+
+        parsed: dict[str, str] = {}
+        for index, match in enumerate(matches):
+            end = matches[index + 1].start() if index + 1 < len(matches) else len(code)
+            parsed[match.group(1)] = code[match.end():end].strip()
+        return parsed or {"<generated>.py": code}
+
+    @staticmethod
+    def _redact_preview(preview: str) -> str:
+        """Redact credential-like values before writing generated text to logs."""
+        secret_key = re.compile(
+            r"(?i)(api[_-]?key|token|password|secret|credential|oauth|access[_-]?key)"
+            r"(\s*[:=]\s*)([^\s,}]+)"
+        )
+        return secret_key.sub(r"\1\2[REDACTED]", preview)
 
     async def _validate_syntax(self, code: str) -> ValidationResult:
         """Validate Python syntax.
@@ -192,18 +280,24 @@ class ValidatorService:
         start = time.time()
         errors = []
 
-        # Security checks
-        dangerous_patterns = [
-            ("eval(", "Use of eval() is dangerous"),
-            ("exec(", "Use of exec() is dangerous"),
-            ("os.system(", "Direct system calls are dangerous"),
-            ("__import__(", "Dynamic imports may be unsafe"),
-            ("input(", "User input should be validated"),
-        ]
-
-        for pattern, message in dangerous_patterns:
-            if pattern in code:
-                errors.append(message)
+        try:
+            tree = ast.parse(code)
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                function_name = self._called_name(node.func)
+                if function_name == "eval":
+                    errors.append("Use of eval() is dangerous")
+                elif function_name == "exec":
+                    errors.append("Use of exec() is dangerous")
+                elif function_name == "os.system":
+                    errors.append("Direct system calls are dangerous")
+                elif function_name == "__import__":
+                    errors.append("Dynamic imports may be unsafe")
+        except SyntaxError:
+            # Syntax validation reports malformed code; avoid substring-based
+            # security false positives when the source cannot be parsed.
+            pass
 
         passed = len(errors) == 0
 
@@ -213,6 +307,17 @@ class ValidatorService:
             errors=errors,
             duration_ms=int((time.time() - start) * 1000),
         )
+
+    @staticmethod
+    def _called_name(node: ast.AST) -> str:
+        """Return a dotted function name for a simple call expression."""
+        names: list[str] = []
+        while isinstance(node, ast.Attribute):
+            names.append(node.attr)
+            node = node.value
+        if isinstance(node, ast.Name):
+            names.append(node.id)
+        return ".".join(reversed(names))
 
     @staticmethod
     def _should_validate_module(module_name: str) -> bool:

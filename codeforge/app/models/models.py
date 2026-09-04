@@ -47,6 +47,8 @@ class CodeFile(BaseModel):
 
     filename: str = Field(..., description="Filename, e.g. 'models.py'")
     content: str = Field(..., description="Complete file content")
+    language: str = Field(default="unknown", description="Detected programming or data language")
+    file_type: str = Field(default="text", description="Source, configuration, data, or documentation")
 
 
 class TaskStatusResponse(BaseModel):
@@ -68,6 +70,8 @@ class TaskStatusResponse(BaseModel):
     synthesized_code: str | None = None
     # Multi-file output — None when result is a single file
     code_files: list[CodeFile] | None = None
+    validation_results: list[dict[str, Any]] | None = None
+    last_error: str | None = None
 
 
 class ModelOutput(BaseModel):
@@ -81,6 +85,7 @@ class ModelOutput(BaseModel):
     estimated_complexity: str
     latency_ms: int | None = None
     success: bool
+    files: list[CodeFile] | None = None
 
 
 class DebateResult(BaseModel):

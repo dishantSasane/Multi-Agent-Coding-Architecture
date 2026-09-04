@@ -13,7 +13,6 @@ from app.config import get_settings
 from app.core.circuit_breaker import get_circuit_breaker
 from app.core.constants import (
     DEFAULT_MODEL_TIMEOUT,
-    GEMINI_TASK_MODEL_MAP,
     OPENROUTER_TASK_MODEL_MAP,
     PROVIDER_MODELS,
     REASONING_MODEL_TIMEOUT,
@@ -47,7 +46,7 @@ class ModelRouterService:
         self.circuit_breaker = get_circuit_breaker()
         self._model_stats: dict[str, ModelStats] = defaultdict(ModelStats)
         self._provider_priority: dict[ModelProvider, int] = {
-            ModelProvider.GEMINI: 1,      # Primary: gemini-3.5-flash-lite, free quota
+            ModelProvider.GROQ: 1,
             ModelProvider.OPENROUTER: 2,
             ModelProvider.ANTHROPIC: 3,
             ModelProvider.OPENAI: 4,
@@ -80,8 +79,8 @@ class ModelRouterService:
         For OPENROUTER, picks the task-specific free-tier model when a
         ``task_type`` is supplied; falls back to the primary list entry.
         """
-        if provider == ModelProvider.GEMINI and task_type is not None:
-            return GEMINI_TASK_MODEL_MAP.get(task_type, "gemini-3.5-flash-lite")
+        if provider == ModelProvider.GROQ:
+            return self.settings.groq_model
 
         if provider == ModelProvider.OPENROUTER and task_type is not None:
             return OPENROUTER_TASK_MODEL_MAP.get(task_type, "free")
@@ -111,7 +110,7 @@ class ModelRouterService:
             ModelProvider.ANTHROPIC: f"anthropic/{model}",
             ModelProvider.KIMI: f"kimi/{model}",
             ModelProvider.QWEN: f"qwen/{model}",
-            ModelProvider.GEMINI: f"gemini/{model}",
+            ModelProvider.GROQ: f"groq/{model}",
         }
         return provider_model_map.get(provider, f"{provider.value}/{model}")
 
@@ -197,12 +196,12 @@ class ModelRouterService:
         model_name = self._get_model_for_provider(provider, task_type)
         litellm_model = self._map_provider_to_litellm(provider, model_name)
 
-        # Determine timeout — Gemini, Anthropic and OpenAI all need the longer
+        # Determine timeout — Groq, Anthropic and OpenAI all need the longer
         # 120-second window for code generation tasks.
         if timeout is None:
             timeout = (
                 REASONING_MODEL_TIMEOUT
-                if provider in [ModelProvider.GEMINI, ModelProvider.ANTHROPIC, ModelProvider.OPENAI]
+                if provider in [ModelProvider.GROQ, ModelProvider.ANTHROPIC, ModelProvider.OPENAI]
                 else DEFAULT_MODEL_TIMEOUT
             )
 

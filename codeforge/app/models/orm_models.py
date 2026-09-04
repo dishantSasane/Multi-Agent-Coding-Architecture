@@ -116,6 +116,8 @@ class Task(Base):
             "final_code": self.final_code,
             # Multi-file split — None when code is a single file
             "code_files": self.code_files,
+            "validation_results": self.validation_results,
+            "last_error": self.last_error,
         }
 
     def __repr__(self) -> str:

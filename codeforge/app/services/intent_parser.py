@@ -219,10 +219,10 @@ Output ONLY valid JSON, no markdown or explanations."""
         Returns:
             Response content string.
         """
-        # gemini/gemini-3.5-flash-lite — LiteLLM reads GEMINI_API_KEY from the environment.
+        # LiteLLM reads GROQ_API_KEY from the environment.
         # No max_tokens limit so the model returns a complete JSON response.
         response = await acompletion(
-            model="gemini/gemini-3.5-flash-lite",
+            model=f"groq/{self.settings.groq_model}",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
         )

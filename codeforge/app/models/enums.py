@@ -41,4 +41,5 @@ class ModelProviderEnum(str, enum.Enum):
     ANTHROPIC = "anthropic"
     KIMI = "kimi"
     QWEN = "qwen"
+    GROQ = "groq"
     GEMINI = "gemini"

@@ -1,15 +1,17 @@
 """Ensemble Service - Parallel dispatch to multiple LLMs."""
 
 import asyncio
+import re
 from typing import Any
 
 import structlog
 
 from app.config import get_settings
 from app.core.exceptions import CodeForgeException
-from app.models.models import ModelOutput
+from app.models.models import CodeFile, ModelOutput
 from app.services.model_router import ModelRouterService
 from app.models.enums import ModelProvider
+from app.services.code_extractor import extract_code_files
 
 logger = structlog.get_logger(__name__)
 
@@ -44,9 +46,9 @@ class EnsembleService:
         logger.info("generating_ensemble", size=self.ensemble_size)
 
         if providers is None:
-            # Use Gemini exclusively — GEMINI_API_KEY is the configured provider.
+            # Use Groq exclusively — GROQ_API_KEY is the configured provider.
             # Set DEFAULT_ENSEMBLE_SIZE=1 in .env for a single call (recommended).
-            providers = [ModelProvider.GEMINI] * max(1, self.ensemble_size)
+            providers = [ModelProvider.GROQ] * max(1, self.ensemble_size)
 
         messages = []
         if system_prompt:
@@ -105,7 +107,8 @@ class EnsembleService:
 
             # Parse the response to extract code and reasoning
             content = result["content"]
-            code, reasoning = self._parse_response(content)
+            files = extract_code_files(content)
+            code, reasoning = self._parse_response(content, files)
 
             return ModelOutput(
                 provider=provider.value,
@@ -116,6 +119,7 @@ class EnsembleService:
                 estimated_complexity="medium",
                 latency_ms=result["latency_ms"],
                 success=True,
+                files=[CodeFile(**file) for file in files] if files else None,
             )
 
         except asyncio.TimeoutError:
@@ -128,28 +132,41 @@ class EnsembleService:
             logger.exception("model_generation_failed", provider=provider.value, error=str(e))
             raise
 
-    def _parse_response(self, content: str) -> tuple[str, str]:
+    def _parse_response(
+        self,
+        content: str,
+        files: list[dict[str, str]] | None = None,
+    ) -> tuple[str, str]:
         """Parse model response to extract code and reasoning.
 
         Args:
             content: Raw model response.
+            files: Optional structured project manifest, which is authoritative.
 
         Returns:
             Tuple of (code, reasoning).
         """
-        # Look for code blocks
-        import re
+        reasoning = re.sub(r"```.*?```", "", content, flags=re.DOTALL).strip()
 
+        if files:
+            python_files = [file for file in files if file["filename"].endswith(".py")]
+            entry_file = next(
+                (file for file in python_files if file["filename"] == "main.py"),
+                python_files[0] if python_files else files[0],
+            )
+            return entry_file["content"], reasoning
+
+        # Look for code blocks
         code_blocks = re.findall(r"```(?:\w+)?\n(.*?)```", content, re.DOTALL)
 
         if code_blocks:
             # Take the largest code block
             code = max(code_blocks, key=len).strip()
-            # Reasoning is everything outside code blocks
-            reasoning = re.sub(r"```.*?```", "", content, flags=re.DOTALL).strip()
         else:
             # No code blocks, assume entire content is code
             code = content.strip()
+
+        if not code and not reasoning:
             reasoning = ""
 
         return code, reasoning

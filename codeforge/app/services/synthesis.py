@@ -48,11 +48,37 @@ class SynthesisService:
             )
             if winner_output:
                 logger.info("using_winner_solution", provider=debate_result.winner_provider)
+                compatibility_code = self._compatibility_code(winner_output.files)
                 return {
-                    "code": winner_output.code,
+                    "code": compatibility_code or winner_output.code,
+                    "files": winner_output.files,
                     "reasoning": winner_output.reasoning,
-                    "known_limitations": self._extract_limitations(winner_output.code),
+                    "known_limitations": self._extract_limitations(
+                        compatibility_code or winner_output.code
+                    ),
                 }
+
+        # Keep a complete structured project intact when no consensus winner
+        # exists; merging source strings would discard file boundaries.
+        structured_outputs = [output for output in outputs if output.files]
+        if structured_outputs:
+            selected = max(
+                structured_outputs,
+                key=lambda output: (
+                    len(output.files),
+                    sum(len(file.content) for file in output.files),
+                    len(output.code or ""),
+                ),
+            )
+            compatibility_code = self._compatibility_code(selected.files)
+            return {
+                "code": compatibility_code or selected.code,
+                "files": selected.files,
+                "reasoning": selected.reasoning,
+                "known_limitations": self._extract_limitations(
+                    compatibility_code or selected.code
+                ),
+            }
 
         # Otherwise, merge best parts
         merged_code = self._merge_solutions(outputs, debate_result)
@@ -62,9 +88,35 @@ class SynthesisService:
 
         return {
             "code": merged_code,
+            "files": None,
             "reasoning": reasoning,
             "known_limitations": self._extract_limitations(merged_code),
         }
+
+    @staticmethod
+    def _compatibility_code(files: list[Any] | None) -> str:
+        """Derive the legacy scalar code field from structured files."""
+        if not files:
+            return ""
+
+        file_data = [
+            file.model_dump() if hasattr(file, "model_dump") else file
+            for file in files
+        ]
+        python_files = [
+            file
+            for file in file_data
+            if str(file.get("filename", "")).endswith(".py")
+            and file.get("content", "").strip()
+        ]
+        candidates = python_files or [
+            file for file in file_data if file.get("content", "").strip()
+        ]
+        main_file = next(
+            (file for file in candidates if file.get("filename") == "main.py"),
+            candidates[0] if candidates else None,
+        )
+        return str(main_file.get("content", "")) if main_file else ""
 
     def _merge_solutions(
         self,

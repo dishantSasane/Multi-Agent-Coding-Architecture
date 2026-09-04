@@ -36,7 +36,8 @@ class Settings(BaseSettings):
     anthropic_api_key: str | None = Field(default=None, description="Anthropic API key")
     kimi_api_key: str | None = Field(default=None, description="Kimi API key")
     qwen_api_key: str | None = Field(default=None, description="Qwen API key")
-    gemini_api_key: str | None = Field(default=None, description="Gemini API key")
+    groq_api_key: str | None = Field(default=None, description="Groq API key")
+    groq_model: str = Field(default="openai/gpt-oss-120b", description="Groq model slug")
 
     # OpenAI-compatible base URL override (e.g. https://openrouter.ai/api/v1)
     openai_api_base: str | None = Field(default=None, description="Override OpenAI base URL")
@@ -57,7 +58,7 @@ class Settings(BaseSettings):
 
     # Application
     log_level: str = Field(default="INFO", description="Logging level")
-    max_correction_attempts: int = Field(default=3, ge=1, le=10, description="Maximum self-correction retries")
+    max_correction_attempts: int = Field(default=0, ge=0, le=10, description="Maximum self-correction retries")
     default_ensemble_size: int = Field(default=2, ge=1, le=5, description="Number of models in ensemble")
     secret_key: str = Field(default="change-me-in-production", description="Secret key for JWT")
 
@@ -97,7 +98,7 @@ class Settings(BaseSettings):
             "anthropic": self.anthropic_api_key,
             "kimi": self.kimi_api_key,
             "qwen": self.qwen_api_key,
-            "gemini": self.gemini_api_key,
+            "groq": self.groq_api_key,
         }
 
     # CORS
@@ -132,7 +133,7 @@ def _export_llm_keys_to_env(s: Settings) -> None:
     we bridge the gap here for every configured provider.
     """
     key_map = {
-        "GEMINI_API_KEY":     s.gemini_api_key,
+        "GROQ_API_KEY":       s.groq_api_key,
         "OPENROUTER_API_KEY": s.openrouter_api_key,
         "OPENAI_API_KEY":     s.openai_api_key,
         "ANTHROPIC_API_KEY":  s.anthropic_api_key,

@@ -31,6 +31,7 @@ from app.services.self_correction import SelfCorrectionService
 from app.services.synthesis import SynthesisService
 from app.services.task_decomposer import TaskDecomposerService
 from app.services.validator import ValidatorService
+from app.services.code_extractor import CodeExtractionError, extract_code_files, looks_like_unparsed_configuration
 
 logger = structlog.get_logger(__name__)
 
@@ -416,14 +417,36 @@ class OrchestratorService:
                 task.known_limitations = "\n".join(
                     synthesis_result.get("known_limitations", [])
                 )
-                # Parse multi-file output; None → single file (frontend falls back)
-                task.code_files = self._parse_code_files(synthesis_result["code"])
+                structured_files = synthesis_result.get("files")
+                if structured_files:
+                    task.code_files = [
+                        file.model_dump() if hasattr(file, "model_dump") else file
+                        for file in structured_files
+                    ]
+                    if not any(
+                        str(file.get("content", "")).strip()
+                        for file in task.code_files
+                    ):
+                        raise CodeExtractionError("Generated project contains no file content")
+                else:
+                    task.code_files = self._parse_code_files(synthesis_result["code"])
+                    if task.code_files is None and looks_like_unparsed_configuration(
+                        synthesis_result["code"]
+                    ):
+                        raise CodeExtractionError(
+                            "Generated output looks like configuration but has no identifiable file boundary"
+                        )
+                    if not (synthesis_result.get("code") or "").strip():
+                        raise CodeExtractionError("Generated output is empty")
                 await session.commit()
 
                 logger.info(
                     "synthesis_complete",
                     task_id=str(task_id),
-                    code_length=len(synthesis_result["code"]),
+                    code_length=sum(
+                        len(str(file.get("content", "")))
+                        for file in (task.code_files or [])
+                    ) or len(synthesis_result.get("code") or ""),
                 )
 
                 return task
@@ -459,6 +482,7 @@ class OrchestratorService:
                 validation_results = await self.validator.validate_all(
                     code=task.synthesized_code or "",
                     test_code=task.final_tests,
+                    files=task.code_files,
                 )
 
                 # Store results
@@ -489,7 +513,8 @@ class OrchestratorService:
                         task.status = TaskStatusEnum.SANDBOX_EXECUTING
                     else:
                         task.status = TaskStatusEnum.CORRECTING
-                        task.correction_attempts += 1
+                        if self.settings.max_correction_attempts > 0:
+                            task.correction_attempts += 1
 
                 await session.commit()
 
@@ -529,6 +554,7 @@ class OrchestratorService:
                 result = await self.sandbox.execute_python(
                     code=task.synthesized_code or "",
                     test_code=task.final_tests,
+                    files=task.code_files,
                 )
 
                 # Store results
@@ -607,6 +633,22 @@ class OrchestratorService:
 
                     if task.status == TaskStatusEnum.SANDBOX_EXECUTING:
                         break
+
+                    if max_corrections == 0:
+                        validation_errors = [
+                            error
+                            for result in (task.validation_results or [])
+                            for error in result.get("errors", [])
+                        ]
+                        task.status = TaskStatusEnum.FAILED
+                        task.last_error = "; ".join(validation_errors) or "Generated code failed validation"
+                        await session.commit()
+                        logger.error(
+                            "validation_failed_no_correction",
+                            task_id=str(task_id),
+                            errors=validation_errors,
+                        )
+                        return task
 
                     if task.correction_attempts >= max_corrections:
                         task.status = TaskStatusEnum.FAILED
@@ -790,13 +832,18 @@ For multi-file projects, always separate files using:
 # ==================== filename.py ====================
 <complete file content>
 
+You may also use this format:
+FILE: path/to/file.ext
+<complete file content>
+
 Never truncate or skip files. Generate complete content for every file."""
 
     @staticmethod
     def _parse_code_files(code: str) -> list[dict] | None:
         """Split a multi-file code block into individual file entries.
 
-        Detects the separator pattern::
+        Delegates to the shared extractor, which supports separators and
+        named Markdown fences.
 
             # ==================== filename.py ====================
 
@@ -807,23 +854,7 @@ Never truncate or skip files. Generate complete content for every file."""
         Returns ``None`` for single-file output so the frontend falls back to
         its existing plain code-block display.
         """
-        # Match: # ====...==== filename.py ====...====
-        # At least 10 '=' characters on each side; filename may include path separators.
-        pattern = r"#\s*={10,}\s+([\w./\-]+\.\w+)\s*={10,}"
-        parts = re.split(pattern, code)
-
-        # parts = [preamble, filename1, content1, filename2, content2, ...]
-        if len(parts) <= 1:
-            return None  # no separators found
-
-        files: list[dict] = []
-        for i in range(1, len(parts), 2):
-            filename = parts[i].strip()
-            content = parts[i + 1].strip() if i + 1 < len(parts) else ""
-            if content:
-                files.append({"filename": filename, "content": content})
-
-        return files if len(files) >= 2 else None
+        return extract_code_files(code)
 
 
 # Global orchestrator instance

@@ -2,6 +2,7 @@
 
 import asyncio
 import io
+from pathlib import Path, PurePosixPath
 import tarfile
 import tempfile
 from typing import Any
@@ -45,6 +46,7 @@ class SandboxService:
         code: str,
         test_code: str | None = None,
         timeout: int | None = None,
+        files: list[dict[str, str]] | None = None,
     ) -> dict[str, Any]:
         """Execute Python code in a sandboxed container.
 
@@ -87,6 +89,8 @@ class SandboxService:
                 self._run_container,
                 script,
                 timeout,
+                files,
+                test_code,
             )
 
             logger.info(
@@ -110,6 +114,8 @@ class SandboxService:
         self,
         script: str,
         timeout: int,
+        files: list[dict[str, str]] | None = None,
+        test_code: str | None = None,
     ) -> dict[str, Any]:
         """Run code in a Docker container (synchronous).
 
@@ -125,16 +131,34 @@ class SandboxService:
         start_time = time.time()
 
         try:
-            # Create temporary file with script
-            with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
-                f.write(script)
-                script_path = f.name
+            # Mount a temporary project so imports resolve across generated files.
+            project_dir = tempfile.mkdtemp(prefix="codeforge-sandbox-")
+            entry_path = Path(project_dir) / "generated.py"
+            entry_name = "generated.py"
+            if files:
+                for item in files:
+                    relative = PurePosixPath(item["filename"])
+                    destination = Path(project_dir, *relative.parts)
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    destination.write_text(item["content"], encoding="utf-8")
+                entry_name = next(
+                    (item["filename"] for item in files if item["filename"] == "main.py"),
+                    next((item["filename"] for item in files if item["filename"].endswith(".py")), entry_name),
+                )
+                entry_path = Path(project_dir, *PurePosixPath(entry_name).parts)
+                if test_code:
+                    entry_path.write_text(
+                        entry_path.read_text(encoding="utf-8") + "\n\n" + test_code,
+                        encoding="utf-8",
+                    )
+            else:
+                entry_path.write_text(script, encoding="utf-8")
 
             # Run container
             container = self.client.containers.run(
                 image="python:3.11-slim",
-                command=f"python /app/script.py",
-                volumes={script_path: {"bind": "/app/script.py", "mode": "ro"}},
+                command=f"timeout {timeout}s python /app/{entry_name}",
+                volumes={project_dir: {"bind": "/app", "mode": "ro"}},
                 mem_limit=self.settings.sandbox_memory_limit,
                 nano_cpus=int(self.settings.sandbox_cpu_limit * 1e9),
                 network_disabled=True,  # No network access
@@ -176,13 +200,17 @@ class SandboxService:
             # Pull image if not found
             logger.info("pulling_image", image="python:3.11-slim")
             self.client.images.pull("python:3.11-slim")
-            return self._run_container(script, timeout)
+            return self._run_container(script, timeout, files, test_code)
         finally:
             if container:
                 try:
                     container.remove(force=True)
                 except Exception:
                     pass
+            if "project_dir" in locals():
+                import shutil
+
+                shutil.rmtree(project_dir, ignore_errors=True)
 
     async def validate_syntax(self, code: str) -> tuple[bool, str]:
         """Validate Python syntax without executing.
