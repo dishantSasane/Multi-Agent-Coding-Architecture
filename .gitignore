@@ -44,3 +44,11 @@ __pycache__/
 *$py.class
 *.so
 .Python
+
+# Claude Code (local config and session data)
+CLAUDE.md
+.claude/
+.playwright-mcp/
+
+# graphify (generated knowledge graph output)
+graphify-out/
