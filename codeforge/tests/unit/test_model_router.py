@@ -1,179 +1,190 @@
-"""Unit tests for model router."""
+"""Unit tests for ModelRouterService (app/services/model_router.py)."""
 
-import pytest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+import pytest
+
 from app.core.circuit_breaker import CircuitBreaker
-from app.core.exceptions import CircuitBreakerOpenError, ModelUnavailableError
-from app.models.enums import ModelProvider
-from app.services.model_router import ModelRouter
+from app.core.constants import ModelProvider, TaskType
+from app.core.exceptions import ModelUnavailableError
+from app.services.model_router import ModelRouterService
 
 
-class TestModelRouter:
+def _llm_response(content: str = "ok") -> SimpleNamespace:
+    return SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content=content))],
+        usage=None,
+    )
+
+
+def _isolated_router() -> ModelRouterService:
+    """ModelRouterService.__init__ pulls in get_circuit_breaker(), a
+    process-wide singleton (app/core/circuit_breaker.py) — so state tripped
+    by one test file leaks into the next. Swap in a fresh instance so each
+    test starts from a clean circuit.
+    """
+    router = ModelRouterService()
+    router.circuit_breaker = CircuitBreaker(
+        failure_threshold=router.circuit_breaker.failure_threshold,
+        recovery_timeout=router.circuit_breaker.recovery_timeout,
+    )
+    return router
+
+
+class TestModelRouterService:
     """Test model router service."""
 
     def test_init(self):
-        """Test model router initialization."""
-        router = ModelRouter()
+        router = _isolated_router()
         assert router is not None
-        assert len(router.providers) > 0
-
-    def test_get_provider_for_task_type(self):
-        """Test provider selection based on task type."""
-        router = ModelRouter()
-        
-        # Architecture tasks should prefer Claude
-        provider = router.get_optimal_provider("architecture", "design a system")
-        assert provider is not None
-        
-        # General implementation should prefer GPT-4o
-        provider = router.get_optimal_provider("implementation", "build a function")
-        assert provider is not None
-        
-        # Algorithm tasks should prefer Qwen
-        provider = router.get_optimal_provider("algorithm", "optimize this sorting")
-        assert provider is not None
+        assert len(router._provider_priority) > 0
 
     @pytest.mark.asyncio
-    async def test_route_with_fallback(self, sample_model_output):
-        """Test routing with fallback chain."""
-        router = ModelRouter()
-        
-        with patch.object(router, "call_llm") as mock_call:
-            mock_call.return_value = sample_model_output
-            
-            result = await router.route(
-                provider=ModelProvider.OPENAI,
-                prompt="test prompt",
-                task_type="general",
-            )
-            
-            assert result is not None
-            mock_call.assert_called_once()
+    async def test_get_optimal_provider_returns_task_default(self):
+        router = _isolated_router()
+
+        provider = await router.get_optimal_provider(TaskType.ARCHITECTURE)
+        assert isinstance(provider, ModelProvider)
 
     @pytest.mark.asyncio
-    async def test_circuit_breaker_opens_on_failures(self):
-        """Test circuit breaker opens after failures."""
-        router = ModelRouter()
-        
-        # Simulate failures
-        for _ in range(6):
-            with patch.object(router, "call_llm") as mock_call:
-                mock_call.side_effect = Exception("API Error")
-                
-                try:
-                    await router.route(
-                        provider=ModelProvider.OPENAI,
-                        prompt="test",
-                        task_type="general",
-                    )
-                except Exception:
-                    pass
-        
-        # Circuit breaker should be open now
-        assert router.circuit_breakers[ModelProvider.OPENAI].is_open()
+    async def test_get_optimal_provider_falls_back_when_circuit_open(self):
+        router = _isolated_router()
+        default_provider = await router.get_optimal_provider(TaskType.ARCHITECTURE)
+
+        # Trip the circuit for whichever provider is the task default.
+        for _ in range(router.circuit_breaker.failure_threshold):
+            await router.circuit_breaker.record_failure(default_provider.value)
+
+        fallback = await router.get_optimal_provider(TaskType.ARCHITECTURE)
+        assert fallback != default_provider
 
     @pytest.mark.asyncio
-    async def test_circuit_breaker_prevents_calls(self):
-        """Test that open circuit breaker prevents API calls."""
-        router = ModelRouter()
-        
-        # Manually open the circuit breaker
-        router.circuit_breakers[ModelProvider.OPENAI] = CircuitBreaker(
-            failure_threshold=1,
-            recovery_timeout=30,
-        )
-        router.circuit_breakers[ModelProvider.OPENAI]._failures = 1
-        router.circuit_breakers[ModelProvider.OPENAI]._last_failure_time = router._get_current_time()
-        
-        with pytest.raises(CircuitBreakerOpenError):
-            await router.route(
-                provider=ModelProvider.OPENAI,
-                prompt="test",
-                task_type="general",
+    async def test_execute_with_model_success(self):
+        router = _isolated_router()
+
+        with patch(
+            "app.services.model_router.acompletion",
+            AsyncMock(return_value=_llm_response("generated code")),
+        ):
+            result = await router.execute_with_model(
+                provider=ModelProvider.GROQ,
+                messages=[{"role": "user", "content": "hi"}],
             )
 
-    @pytest.mark.asyncio
-    async def test_adaptive_routing_based_on_latency(self):
-        """Test adaptive routing considers latency."""
-        router = ModelRouter()
-        
-        # Record some latencies
-        router.latency_stats[ModelProvider.OPENAI] = [100, 150, 200]
-        router.latency_stats[ModelProvider.ANTHROPIC] = [500, 600, 700]
-        
-        # OPENAI should be preferred due to lower latency
-        provider = router.get_optimal_provider("general", "test")
-        assert provider is not None
+        assert result["success"] is True
+        assert result["content"] == "generated code"
 
     @pytest.mark.asyncio
-    async def test_success_rate_tracking(self):
-        """Test success rate tracking."""
-        router = ModelRouter()
-        
-        # Record successes and failures
-        router.success_counts[ModelProvider.OPENAI] = 8
-        router.failure_counts[ModelProvider.OPENAI] = 2
-        
-        success_rate = router.get_success_rate(ModelProvider.OPENAI)
-        assert success_rate == 0.8
+    async def test_execute_with_model_raises_model_unavailable_on_failure(self):
+        router = _isolated_router()
 
-    @pytest.mark.asyncio
-    async def test_fallback_chain(self, sample_model_output):
-        """Test fallback to alternative providers."""
-        router = ModelRouter()
-        
-        call_order = []
-        
-        def side_effect(provider, *args, **kwargs):
-            call_order.append(provider)
-            if provider == ModelProvider.OPENAI:
-                raise ModelUnavailableError("OpenAI is down")
-            return sample_model_output
-        
-        with patch.object(router, "call_llm") as mock_call:
-            mock_call.side_effect = side_effect
-            
-            result = await router.route_with_fallback(
-                prompt="test",
-                task_type="general",
-                preferred_providers=[ModelProvider.OPENAI, ModelProvider.ANTHROPIC],
-            )
-            
-            assert result is not None
-            assert ModelProvider.OPENAI in call_order
-            assert ModelProvider.ANTHROPIC in call_order
-
-    @pytest.mark.asyncio
-    async def test_no_available_providers_raises_error(self):
-        """Test error when all providers are unavailable."""
-        router = ModelRouter()
-        
-        with patch.object(router, "call_llm") as mock_call:
-            mock_call.side_effect = ModelUnavailableError("All providers down")
-            
+        with patch(
+            "app.services.model_router.acompletion",
+            AsyncMock(side_effect=RuntimeError("provider down")),
+        ):
             with pytest.raises(ModelUnavailableError):
-                await router.route_with_fallback(
-                    prompt="test",
-                    task_type="general",
-                    preferred_providers=[ModelProvider.OPENAI],
+                await router.execute_with_model(
+                    provider=ModelProvider.GROQ,
+                    messages=[{"role": "user", "content": "hi"}],
                 )
 
-    def test_get_all_available_providers(self):
-        """Test getting available providers."""
-        router = ModelRouter()
-        
-        providers = router.get_available_providers()
-        assert len(providers) > 0
-        
-        # All providers should be enums
-        for provider in providers:
-            assert isinstance(provider, ModelProvider)
+    @pytest.mark.asyncio
+    async def test_execute_with_model_records_circuit_breaker_failure(self):
+        router = _isolated_router()
 
-    def test_model_capabilities(self):
-        """Test model capability lookup."""
-        router = ModelRouter()
-        
-        # Check that capabilities are defined
-        capabilities = router.get_model_capabilities("gpt-4o")
-        assert capabilities is not None
+        with patch(
+            "app.services.model_router.acompletion",
+            AsyncMock(side_effect=RuntimeError("provider down")),
+        ):
+            with pytest.raises(ModelUnavailableError):
+                await router.execute_with_model(
+                    provider=ModelProvider.GROQ,
+                    messages=[{"role": "user", "content": "hi"}],
+                )
+
+        stats = await router.circuit_breaker.get_stats(ModelProvider.GROQ.value)
+        assert stats["failure_count"] == 1
+
+    def test_get_fallback_chain_excludes_primary(self):
+        router = _isolated_router()
+
+        chain = router.get_fallback_chain(ModelProvider.OPENROUTER)
+
+        assert ModelProvider.OPENROUTER not in chain
+        assert len(chain) == len(list(ModelProvider)) - 1
+
+    def test_model_stats_track_success_and_failure(self):
+        router = _isolated_router()
+
+        router._update_stats("groq:model", success=True, latency_ms=100)
+        router._update_stats("groq:model", success=False, latency_ms=200)
+
+        stats = router.get_model_stats(ModelProvider.GROQ)["models"]["groq:model"]
+        assert stats["total_calls"] == 2
+        assert stats["successful_calls"] == 1
+        assert stats["failed_calls"] == 1
+        assert stats["success_rate"] == 0.5
+
+
+if __name__ == "__main__":
+    import asyncio
+
+    async def demo() -> None:
+        router = _isolated_router()
+        with patch(
+            "app.services.model_router.acompletion",
+            AsyncMock(return_value=_llm_response("ok")),
+        ):
+            result = await router.execute_with_model(
+                provider=ModelProvider.GROQ, messages=[{"role": "user", "content": "hi"}]
+            )
+            assert result["success"] is True
+        print("self-check passed")
+
+    asyncio.run(demo())
+
+
+@pytest.mark.asyncio
+async def test_openrouter_walks_free_pool_on_rate_limit():
+    """A 429 on the first free model moves to the next; only :free slugs are used."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from litellm.exceptions import RateLimitError
+
+    from app.core.constants import OPENROUTER_FREE_POOL, ModelProvider
+    from app.services.model_router import ModelRouterService
+
+    assert all(m.endswith(":free") for m in OPENROUTER_FREE_POOL)
+    ok = MagicMock()
+    ok.choices = [MagicMock(message=MagicMock(content="hi"))]
+    ok.usage = None
+    router = ModelRouterService()
+    await router.circuit_breaker.reset()
+    mock = AsyncMock(side_effect=[RateLimitError("busy", "openrouter", "m"), ok])
+    with patch("app.services.model_router.acompletion", mock):
+        result = await router.execute_with_model(
+            ModelProvider.OPENROUTER, [{"role": "user", "content": "x"}]
+        )
+    assert result["model"] == OPENROUTER_FREE_POOL[1]
+    assert mock.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_truncated_output_is_rejected():
+    """finish_reason=length means a cut-off project; the member must fail, not validate."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from app.core.constants import ModelProvider
+    from app.core.exceptions import ModelUnavailableError
+    from app.services.model_router import ModelRouterService
+
+    cut = MagicMock()
+    cut.choices = [MagicMock(finish_reason="length", message=MagicMock(content="def f("))]
+    cut.usage = None
+    router = ModelRouterService()
+    await router.circuit_breaker.reset()
+    with patch("app.services.model_router.acompletion", AsyncMock(return_value=cut)):
+        with pytest.raises(ModelUnavailableError):
+            await router.execute_with_model(ModelProvider.GROQ, [{"role": "user", "content": "x"}])
+    await router.circuit_breaker.reset()

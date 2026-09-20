@@ -48,7 +48,6 @@ _KNOWN_MODULES: frozenset[str] = (
 )
 
 from app.config import get_settings
-from app.core.exceptions import ValidationError
 from app.models.models import ValidationResult
 from app.services.code_extractor import file_metadata, normalize_filename
 

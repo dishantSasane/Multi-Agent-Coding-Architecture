@@ -3,10 +3,10 @@
 import traceback
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks
 from pydantic import BaseModel
 
-from app.models.models import QueryRequest, TaskResult, TaskStatusResponse
+from app.models.models import QueryRequest, TaskStatusResponse
 from app.services.orchestrator import get_orchestrator
 
 router = APIRouter()
@@ -26,7 +26,7 @@ class SubmitResponse(BaseModel):
 
 
 async def _run_pipeline_background(task_id: UUID) -> None:
-    """Run the full pipeline as a FastAPI background task (no Celery needed)."""
+    """Run the full pipeline as a FastAPI background task (no task queue needed)."""
     try:
         orchestrator = get_orchestrator()
         await orchestrator.run_full_pipeline(task_id)
@@ -51,26 +51,21 @@ async def submit_query(
     Returns:
         Task ID and initial status.
     """
-    try:
-        orchestrator = get_orchestrator()
-        task = await orchestrator.create_task(
-            user_query=request.query,
-            context=request.context,
-            preferences=request.preferences,
-        )
+    orchestrator = get_orchestrator()
+    task = await orchestrator.create_task(
+        user_query=request.query,
+        context=request.context,
+        preferences=request.preferences,
+    )
 
-        # Fire pipeline in background — response returns immediately with task_id
-        background_tasks.add_task(_run_pipeline_background, task.id)
+    # Fire pipeline in background — response returns immediately with task_id
+    background_tasks.add_task(_run_pipeline_background, task.id)
 
-        return SubmitResponse(
-            task_id=task.id,
-            status=_to_str(task.status),
-            message="Task created. Pipeline started. Poll /status for updates.",
-        )
-
-    except Exception as e:
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+    return SubmitResponse(
+        task_id=task.id,
+        status=_to_str(task.status),
+        message="Task created. Pipeline started. Poll /status for updates.",
+    )
 
 
 @router.post("/{task_id}/run", response_model=TaskStatusResponse)
@@ -83,11 +78,6 @@ async def run_pipeline(task_id: UUID) -> TaskStatusResponse:
     Returns:
         Updated task status.
     """
-    try:
-        orchestrator = get_orchestrator()
-        task = await orchestrator.run_full_pipeline(task_id)
-        return TaskStatusResponse(**task.to_dict())
-
-    except Exception as e:
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+    orchestrator = get_orchestrator()
+    task = await orchestrator.run_full_pipeline(task_id)
+    return TaskStatusResponse(**task.to_dict())

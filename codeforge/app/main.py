@@ -15,10 +15,7 @@ from app.core.exceptions import (
     CircuitBreakerOpenError,
     CodeForgeException,
     ModelUnavailableError,
-    SandboxExecutionError,
     SecurityViolationError,
-    SelfCorrectionExhaustedError,
-    ValidationError,
 )
 from app.models.database import init_db
 from app.utils.logging import configure_logging, get_logger

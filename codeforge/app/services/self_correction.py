@@ -1,13 +1,10 @@
 """Self-Correction Service - Automatic error correction loop."""
 
-import asyncio
 from typing import Any
 
 import structlog
-from litellm import acompletion
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-from app.core.exceptions import SelfCorrectionExhaustedError
 from app.models.models import ValidationResult
 from app.services.model_router import ModelRouterService
 from app.models.enums import ModelProvider

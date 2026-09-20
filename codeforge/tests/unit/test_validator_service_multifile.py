@@ -381,3 +381,18 @@ async def test_gmail_project_manifest_survives_generation_to_validation() -> Non
     assert [file["filename"] for file in manifest] == list(file_contents)
     assert manifest[0]["file_type"] == "configuration"
     assert all(result.passed for result in validation)
+
+
+def test_fenced_file_bodies_under_separators_are_unwrapped():
+    """Models often put ```python fences under a separator; they must not reach the file."""
+    from app.services.code_extractor import extract_code_files
+
+    raw = (
+        "# ==================== backend/main.py ====================\n"
+        "```python\nprint('a')\n```\n\n"
+        "# ==================== frontend/App.js ====================\n"
+        "```jsx\nconst a = 1;\n```\nThis app saves data.\n"
+    )
+    files = {f["filename"]: f["content"] for f in extract_code_files(raw)}
+    assert files["backend/main.py"] == "print('a')"
+    assert files["frontend/App.js"] == "const a = 1;"

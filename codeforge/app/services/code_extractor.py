@@ -9,6 +9,8 @@ _SEPARATOR_RE = re.compile(
     r"^#\s*={10,}\s+([^\s=]+)\s*={10,}\s*$", re.MULTILINE
 )
 _FENCE_RE = re.compile(r"```([^\n`]*)\n(.*?)```", re.DOTALL)
+# A file body wrapped in its own Markdown fence (models often do this under a separator).
+_WRAPPING_FENCE_RE = re.compile(r"\A```[^\n`]*\n(.*)\n```", re.DOTALL)
 _FILENAME_RE = re.compile(r"(?:file|filename|path)\s*[:=]\s*([\w./-]+)", re.IGNORECASE)
 _FILE_MARKER_RE = re.compile(r"^\s*FILE\s*:\s*(\S+)\s*$", re.IGNORECASE | re.MULTILINE)
 
@@ -81,6 +83,9 @@ def file_metadata(filename: str) -> tuple[str, str]:
 def _validate_file(filename: str, content: str) -> dict[str, str]:
     """Validate one extracted file and attach stable metadata."""
     normalized = normalize_filename(filename)
+    wrapped = _WRAPPING_FENCE_RE.match(content)
+    if wrapped:
+        content = wrapped.group(1).strip()
     if not content or len(content.encode("utf-8")) > MAX_FILE_SIZE:
         raise CodeExtractionError(f"Invalid or oversized generated file: {normalized}")
     language, file_type = file_metadata(normalized)

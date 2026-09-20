@@ -1,8 +1,8 @@
 """Ensemble Service - Parallel dispatch to multiple LLMs."""
 
 import asyncio
+import random
 import re
-from typing import Any
 
 import structlog
 
@@ -46,9 +46,13 @@ class EnsembleService:
         logger.info("generating_ensemble", size=self.ensemble_size)
 
         if providers is None:
-            # Use Groq exclusively — GROQ_API_KEY is the configured provider.
-            # Set DEFAULT_ENSEMBLE_SIZE=1 in .env for a single call (recommended).
-            providers = [ModelProvider.GROQ] * max(1, self.ensemble_size)
+            # One call per provider that has a key, run in parallel (no fallback).
+            # OpenRouter is pinned to its free router in PROVIDER_MODELS.
+            keyed = self.settings.get_enabled_providers()
+            providers = [
+                p for p in (ModelProvider.GROQ, ModelProvider.OPENROUTER, ModelProvider.GEMINI)
+                if p.value in keyed
+            ][: max(1, self.ensemble_size)]
 
         messages = []
         if system_prompt:
@@ -95,6 +99,12 @@ class EnsembleService:
         Returns:
             ModelOutput object.
         """
+        if provider == ModelProvider.OPENROUTER:
+            # Walking the free pool (retries + up to 4 models) needs more than 60s.
+            timeout_seconds = max(timeout_seconds, 120)
+        if provider != ModelProvider.GROQ:
+            # Jitter so the free-tier gateways don't see three simultaneous requests.
+            await asyncio.sleep(random.uniform(0, 1))
         try:
             result = await asyncio.wait_for(
                 self.router.execute_with_model(
@@ -170,27 +180,3 @@ class EnsembleService:
             reasoning = ""
 
         return code, reasoning
-
-    def vote_on_outputs(self, outputs: list[ModelOutput]) -> ModelOutput | None:
-        """Select best output using simple voting.
-
-        Args:
-            outputs: List of model outputs.
-
-        Returns:
-            Best output or None if no outputs.
-        """
-        if not outputs:
-            return None
-
-        if len(outputs) == 1:
-            return outputs[0]
-
-        # Simple scoring: prefer longer, more complete solutions
-        scored = []
-        for output in outputs:
-            score = len(output.code) * 0.5 + output.confidence * 100
-            scored.append((score, output))
-
-        scored.sort(key=lambda x: x[0], reverse=True)
-        return scored[0][1]

@@ -1,208 +1,158 @@
-"""Unit tests for self-correction engine."""
+"""Unit tests for SelfCorrectionService (app/services/self_correction.py)."""
+
+from unittest.mock import AsyncMock
 
 import pytest
-from unittest.mock import AsyncMock, patch
+from tenacity import RetryError
 
-from app.core.exceptions import SelfCorrectionExhaustedError
-from app.services.self_correction import SelfCorrectionEngine
+from app.core.constants import ModelProvider
+from app.models.models import ValidationResult
+from app.services.self_correction import SelfCorrectionService
 
 
-class TestSelfCorrection:
-    """Test self-correction engine."""
+def _result(stage: str, passed: bool, errors: list[str] | None = None) -> ValidationResult:
+    return ValidationResult(stage=stage, passed=passed, errors=errors or [])
+
+
+class TestSelfCorrectionService:
+    """Test self-correction service."""
 
     def test_init(self):
-        """Test self-correction engine initialization."""
-        engine = SelfCorrectionEngine()
-        assert engine is not None
-        assert engine.max_attempts == 3
+        service = SelfCorrectionService()
+        assert service is not None
+        assert "Fix ALL the validation errors" in service.correction_prompt
 
     @pytest.mark.asyncio
-    async def test_correct_syntax_error(self):
-        """Test correction of syntax error."""
-        engine = SelfCorrectionEngine()
-        
-        broken_code = "def broken("
-        error_context = {
-            "stage": "syntax",
-            "error": "SyntaxError",
-            "message": "unexpected EOF while parsing",
-        }
-        
-        with patch.object(engine.llm_client, "completion") as mock_completion:
-            mock_completion.return_value = """
-```python
-def broken():
-    pass
-```
-"""
-            
-            result = await engine.correct("test-task", broken_code, error_context, attempt=1)
-            
-            assert result["success"] is True
-            assert "corrected_code" in result
+    async def test_correct_code_returns_unchanged_when_all_passed(self):
+        service = SelfCorrectionService()
+        results = [_result("syntax", passed=True)]
+
+        corrected = await service.correct_code("print(1)", results, requirements=[])
+
+        assert corrected == "print(1)"
 
     @pytest.mark.asyncio
-    async def test_correct_security_issue(self):
-        """Test correction of security vulnerability."""
-        engine = SelfCorrectionEngine()
-        
-        vulnerable_code = 'query = f"SELECT * FROM users WHERE id = {user_id}"'
-        error_context = {
-            "stage": "security",
-            "error": "SQLInjection",
-            "message": "Potential SQL injection vulnerability detected",
-        }
-        
-        with patch.object(engine.llm_client, "completion") as mock_completion:
-            mock_completion.return_value = """
-```python
-query = "SELECT * FROM users WHERE id = %s"
-cursor.execute(query, (user_id,))
-```
-"""
-            
-            result = await engine.correct("test-task", vulnerable_code, error_context, attempt=1)
-            
-            assert result["success"] is True
-            assert "%s" in result["corrected_code"]
+    async def test_correct_code_calls_llm_with_errors(self):
+        service = SelfCorrectionService()
+        service.router.execute_with_model = AsyncMock(
+            return_value={"content": "```python\ndef fixed(): pass\n```"}
+        )
+        results = [_result("syntax", passed=False, errors=["unexpected EOF"])]
+
+        corrected = await service.correct_code(
+            "def broken(", results, requirements=["Fix syntax"]
+        )
+
+        assert corrected == "def fixed(): pass"
+        service.router.execute_with_model.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_max_attempts_exceeded(self):
-        """Test that max attempts limit is enforced."""
-        engine = SelfCorrectionEngine()
-        
-        broken_code = "invalid"
-        error_context = {"error": "SyntaxError"}
-        
-        # Simulate 3 failed attempts
-        with patch.object(engine.llm_client, "completion") as mock_completion:
-            mock_completion.return_value = "still invalid"
-            
-            # First attempt
-            await engine.correct("test-task", broken_code, error_context, attempt=1)
-            
-            # Second attempt
-            await engine.correct("test-task", broken_code, error_context, attempt=2)
-            
-            # Third attempt - should raise error
-            with pytest.raises(SelfCorrectionExhaustedError):
-                result = await engine.correct(
-                    "test-task", broken_code, error_context, attempt=4
-                )
+    async def test_correct_code_uses_requested_provider(self):
+        service = SelfCorrectionService()
+        service.router.execute_with_model = AsyncMock(return_value={"content": "fixed"})
+        results = [_result("syntax", passed=False, errors=["bad"])]
+
+        await service.correct_code(
+            "code", results, requirements=[], provider=ModelProvider.GROQ.value
+        )
+
+        call_kwargs = service.router.execute_with_model.call_args[1]
+        assert call_kwargs["provider"] == ModelProvider.GROQ
 
     @pytest.mark.asyncio
-    async def test_exponential_backoff(self):
-        """Test exponential backoff between retries."""
-        engine = SelfCorrectionEngine()
-        
-        error_context = {"error": "ValidationError"}
-        
-        with patch.object(engine.llm_client, "completion") as mock_completion:
-            mock_completion.return_value = "fixed code"
-            
-            with patch("asyncio.sleep") as mock_sleep:
-                # First retry should have shorter delay
-                await engine.correct("test-task", "code1", error_context, attempt=1)
-                
-                # Second retry should have longer delay
-                await engine.correct("test-task", "code2", error_context, attempt=2)
-                
-                # Verify backoff increases
-                assert mock_sleep.call_count >= 0
+    async def test_correct_code_propagates_llm_failure(self):
+        service = SelfCorrectionService()
+        service.router.execute_with_model = AsyncMock(side_effect=RuntimeError("provider down"))
+        results = [_result("syntax", passed=False, errors=["bad"])]
+
+        # @retry(stop_after_attempt(3)) wraps the exhausted failure in a
+        # tenacity.RetryError rather than re-raising the original error.
+        with pytest.raises(RetryError):
+            await service.correct_code("code", results, requirements=[])
 
     @pytest.mark.asyncio
-    async def test_error_context_included_in_prompt(self):
-        """Test that error context is included in correction prompt."""
-        engine = SelfCorrectionEngine()
-        
-        error_context = {
-            "stage": "validation",
-            "error": "ImportError",
-            "message": "ModuleNotFoundError: No module named 'requests'",
-            "traceback": "File \"test.py\", line 5",
-        }
-        
-        with patch.object(engine.llm_client, "completion") as mock_completion:
-            mock_completion.return_value = "import requests\n# fixed"
-            
-            await engine.correct("test-task", "code", error_context, attempt=1)
-            
-            # Verify the prompt includes error context
-            call_args = mock_completion.call_args
-            prompt = call_args[0][0] if call_args[0] else call_args[1].get("prompt", "")
-            
-            assert "ImportError" in prompt or "ModuleNotFoundError" in prompt
+    async def test_run_correction_loop_succeeds_first_try(self):
+        service = SelfCorrectionService()
+        validate_func = AsyncMock(return_value=[_result("syntax", passed=True)])
+
+        final_code, results, success = await service.run_correction_loop(
+            "print(1)", None, validate_func, max_attempts=3
+        )
+
+        assert success is True
+        assert final_code == "print(1)"
+        validate_func.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_successful_correction_validated(self):
-        """Test that corrected code is validated."""
-        engine = SelfCorrectionEngine()
-        
-        error_context = {"error": "SyntaxError"}
-        
-        with patch.object(engine.llm_client, "completion") as mock_completion:
-            mock_completion.return_value = "def valid(): pass"
-            
-            with patch.object(engine.validator, "check_syntax") as mock_validate:
-                mock_validate.return_value = {"valid": True, "errors": []}
-                
-                result = await engine.correct("test-task", "invalid", error_context, attempt=1)
-                
-                assert result["success"] is True
-                mock_validate.assert_called_once()
+    async def test_run_correction_loop_corrects_then_succeeds(self):
+        service = SelfCorrectionService()
+        validate_func = AsyncMock(
+            side_effect=[
+                [_result("syntax", passed=False, errors=["bad"])],
+                [_result("syntax", passed=True)],
+            ]
+        )
+        service.correct_code = AsyncMock(return_value="print('fixed')")
+
+        final_code, results, success = await service.run_correction_loop(
+            "broken(", None, validate_func, max_attempts=3
+        )
+
+        assert success is True
+        assert final_code == "print('fixed')"
+        assert validate_func.call_count == 2
+        service.correct_code.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_correction_preserves_functionality(self):
-        """Test that corrections preserve original functionality."""
-        engine = SelfCorrectionEngine()
-        
-        original_code = """
-def calculate_total(items):
-    total = 0
-    for item in items:
-        total += item.price
-    return total
-"""
-        
-        # Missing type hints (not a functional issue)
-        error_context = {
-            "stage": "style",
-            "error": "MissingTypeHints",
-            "message": "Function lacks type annotations",
-        }
-        
-        with patch.object(engine.llm_client, "completion") as mock_completion:
-            mock_completion.return_value = """
-def calculate_total(items: list) -> float:
-    total = 0
-    for item in items:
-        total += item.price
-    return total
-"""
-            
-            result = await engine.correct("test-task", original_code, error_context, attempt=1)
-            
-            assert result["success"] is True
-            # Core logic should be preserved
-            assert "total += item.price" in result["corrected_code"]
+    async def test_run_correction_loop_exhausts_attempts(self):
+        service = SelfCorrectionService()
+        validate_func = AsyncMock(return_value=[_result("syntax", passed=False, errors=["bad"])])
+        service.correct_code = AsyncMock(return_value="still broken")
+
+        final_code, results, success = await service.run_correction_loop(
+            "broken(", None, validate_func, max_attempts=2
+        )
+
+        assert success is False
+        assert validate_func.call_count == 2
 
     @pytest.mark.asyncio
-    async def test_unfixable_error_returns_original(self):
-        """Test handling of unfixable errors."""
-        engine = SelfCorrectionEngine()
-        
-        # Semantic error that can't be auto-fixed
-        error_context = {
-            "stage": "logic",
-            "error": "LogicError",
-            "message": "Algorithm produces incorrect results for edge case",
-        }
-        
-        with patch.object(engine.llm_client, "completion") as mock_completion:
-            mock_completion.side_effect = Exception("Cannot fix without more context")
-            
-            result = await engine.correct("test-task", "code", error_context, attempt=1)
-            
-            # Should indicate failure but not crash
-            assert result["success"] is False
-            assert "error" in result
+    async def test_run_correction_loop_stops_when_correction_fails(self):
+        service = SelfCorrectionService()
+        validate_func = AsyncMock(return_value=[_result("syntax", passed=False, errors=["bad"])])
+        service.correct_code = AsyncMock(side_effect=RuntimeError("llm down"))
+
+        final_code, results, success = await service.run_correction_loop(
+            "broken(", None, validate_func, max_attempts=3
+        )
+
+        assert success is False
+        # correction attempted once, then loop bails rather than retrying blindly
+        service.correct_code.assert_called_once()
+
+    def test_format_error_context(self):
+        service = SelfCorrectionService()
+        results = [
+            _result("syntax", passed=False, errors=["unexpected EOF"]),
+            _result("security", passed=True),
+        ]
+
+        context = service.format_error_context(results)
+
+        assert "### syntax" in context
+        assert "unexpected EOF" in context
+        assert "### security" not in context
+
+
+if __name__ == "__main__":
+    import asyncio
+
+    async def demo() -> None:
+        service = SelfCorrectionService()
+        service.router.execute_with_model = AsyncMock(return_value={"content": "print(1)"})
+        results = [_result("syntax", passed=False, errors=["bad"])]
+        corrected = await service.correct_code("broken(", results, requirements=[])
+        assert corrected == "print(1)"
+        print("self-check passed")
+
+    asyncio.run(demo())

@@ -1,200 +1,170 @@
-"""Unit tests for validator service."""
+"""Unit tests for ValidatorService (app/services/validator.py)."""
 
 import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
 
-from app.core.exceptions import ValidationError
-from app.services.validator import Validator
+from app.services.validator import ValidatorService
 
 
-class TestValidator:
+class TestValidatorService:
     """Test validator service."""
 
     def test_init(self):
-        """Test validator initialization."""
-        validator = Validator()
+        validator = ValidatorService()
         assert validator is not None
 
     @pytest.mark.asyncio
-    async def test_syntax_check_valid(self, sandbox_code):
-        """Test syntax check with valid code."""
-        validator = Validator()
-        
-        result = await validator.check_syntax(sandbox_code, "python")
-        
-        assert result["valid"] is True
-        assert result["errors"] == []
+    async def test_validate_syntax_valid_code(self, sandbox_code):
+        validator = ValidatorService()
+        result = await validator._validate_syntax(sandbox_code)
+
+        assert result.passed is True
+        assert result.errors == []
 
     @pytest.mark.asyncio
-    async def test_syntax_check_invalid(self, invalid_code):
-        """Test syntax check with invalid code."""
-        validator = Validator()
-        
-        result = await validator.check_syntax(invalid_code, "python")
-        
-        assert result["valid"] is False
-        assert len(result["errors"]) > 0
+    async def test_validate_syntax_invalid_code(self, invalid_code):
+        validator = ValidatorService()
+        result = await validator._validate_syntax(invalid_code)
+
+        assert result.passed is False
+        assert len(result.errors) > 0
 
     @pytest.mark.asyncio
-    async def test_static_analysis_with_ruff(self, sandbox_code):
-        """Test static analysis with ruff."""
-        validator = Validator()
-        
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0, stdout=b"", stderr=b"")
-            
-            result = await validator.run_ruff(sandbox_code)
-            
-            assert result["passed"] is True
+    async def test_validate_static_analysis_flags_bare_except(self):
+        validator = ValidatorService()
+        code = "try:\n    pass\nexcept:\n    pass\n"
+
+        result = await validator._validate_static_analysis(code)
+
+        assert result.passed is False
+        assert any("Bare except" in e for e in result.errors)
 
     @pytest.mark.asyncio
-    async def test_security_scan_with_bandit(self, sandbox_code):
-        """Test security scan with bandit."""
-        validator = Validator()
-        
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0, stdout=b"{}", stderr=b"")
-            
-            result = await validator.run_bandit(sandbox_code)
-            
-            assert result["passed"] is True
-            assert len(result["issues"]) == 0
+    async def test_validate_static_analysis_warns_on_print(self):
+        validator = ValidatorService()
+        result = await validator._validate_static_analysis("print('hi')\n")
+
+        assert result.passed is True
+        assert any("Print statement" in w for w in result.warnings)
 
     @pytest.mark.asyncio
-    async def test_import_resolution(self, sandbox_code):
-        """Test import resolution."""
-        validator = Validator()
-        
-        result = await validator.check_imports(sandbox_code)
-        
-        assert result["valid"] is True
-        assert result["missing_imports"] == []
+    async def test_validate_security_flags_eval(self):
+        validator = ValidatorService()
+        result = await validator._validate_security("eval('1+1')")
+
+        assert result.passed is False
+        assert any("eval" in e for e in result.errors)
 
     @pytest.mark.asyncio
-    async def test_validate_all_stages_pass(self, sandbox_code):
-        """Test full validation pipeline with all stages passing."""
-        validator = Validator()
-        
-        with patch.object(validator, "check_syntax") as mock_syntax:
-            mock_syntax.return_value = {"valid": True, "errors": []}
-            
-            with patch.object(validator, "run_ruff") as mock_ruff:
-                mock_ruff.return_value = {"passed": True, "issues": []}
-                
-                with patch.object(validator, "run_bandit") as mock_bandit:
-                    mock_bandit.return_value = {"passed": True, "issues": []}
-                    
-                    with patch.object(validator, "check_imports") as mock_imports:
-                        mock_imports.return_value = {"valid": True, "missing_imports": []}
-                        
-                        result = await validator.validate_all("test-task", sandbox_code)
-                        
-                        assert result["all_passed"] is True
-                        assert result["syntax_valid"] is True
-                        assert result["security_valid"] is True
+    async def test_validate_security_flags_exec(self, malicious_code):
+        validator = ValidatorService()
+        result = await validator._validate_security(malicious_code)
+
+        assert result.passed is False
 
     @pytest.mark.asyncio
-    async def test_validate_fails_on_syntax_error(self, invalid_code):
-        """Test validation fails on syntax error."""
-        validator = Validator()
-        
-        with patch.object(validator, "check_syntax") as mock_syntax:
-            mock_syntax.return_value = {
-                "valid": False,
-                "errors": ["SyntaxError: invalid syntax"],
-            }
-            
-            result = await validator.validate_all("test-task", invalid_code)
-            
-            assert result["all_passed"] is False
-            assert result["syntax_valid"] is False
+    async def test_validate_security_passes_clean_code(self, sandbox_code):
+        validator = ValidatorService()
+        result = await validator._validate_security(sandbox_code)
+
+        assert result.passed is True
 
     @pytest.mark.asyncio
-    async def test_validate_fails_on_security_issue(self, malicious_code):
-        """Test validation fails on security issue."""
-        validator = Validator()
-        
-        with patch.object(validator, "check_syntax") as mock_syntax:
-            mock_syntax.return_value = {"valid": True, "errors": []}
-            
-            with patch.object(validator, "run_bandit") as mock_bandit:
-                mock_bandit.return_value = {
-                    "passed": False,
-                    "issues": [{"severity": "HIGH", "description": "Dangerous function"}],
-                }
-                
-                result = await validator.validate_all("test-task", malicious_code)
-                
-                assert result["all_passed"] is False
-                assert result["security_valid"] is False
+    async def test_validate_imports_resolves_stdlib(self):
+        validator = ValidatorService()
+        result = await validator._validate_imports("import json\nimport os\n")
+
+        assert result.passed is True
 
     @pytest.mark.asyncio
-    async def test_property_based_testing(self, sandbox_code):
-        """Test property-based testing with hypothesis."""
-        validator = Validator()
-        
-        # Create a simple testable function
-        test_code = """
-def add(a: int, b: int) -> int:
-    return a + b
-"""
-        
-        with patch.object(validator, "run_hypothesis_tests") as mock_hypothesis:
-            mock_hypothesis.return_value = {
-                "passed": True,
-                "iterations": 100,
-                "failures": [],
-            }
-            
-            result = await validator.run_property_tests(test_code)
-            
-            assert result["passed"] is True
+    async def test_validate_imports_skips_local_modules(self):
+        validator = ValidatorService()
+        # "database" and "models" look like local project files, not
+        # installed packages — should not be flagged as unresolved.
+        result = await validator._validate_imports("import database\nfrom models import User\n")
+
+        assert result.passed is True
 
     @pytest.mark.asyncio
-    async def test_unit_test_execution(self, sandbox_code):
-        """Test unit test execution."""
-        validator = Validator()
-        
-        test_code = """
-import pytest
+    async def test_validate_imports_skips_multi_file_blocks(self):
+        validator = ValidatorService()
+        code = "# models.py\nimport nonexistent_totally_fake_package\n"
 
-def test_add():
-    assert 2 + 2 == 4
-"""
-        
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0, stdout=b"1 passed", stderr=b"")
-            
-            result = await validator.run_unit_tests(test_code)
-            
-            assert result["passed"] is True
-            assert result["tests_run"] > 0
+        result = await validator._validate_imports(code)
+
+        assert result.passed is True
+        assert any("multi-file" in w for w in result.warnings)
 
     @pytest.mark.asyncio
-    async def test_validation_timeout(self, sandbox_code):
-        """Test validation timeout handling."""
-        validator = Validator()
-        validator.timeout = 1  # 1 second timeout
-        
-        with patch.object(validator, "check_syntax") as mock_syntax:
-            mock_syntax.side_effect = TimeoutError("Validation timed out")
-            
-            with pytest.raises(ValidationError):
-                await validator.validate_all("test-task", sandbox_code)
+    async def test_validate_all_single_file(self, sandbox_code):
+        validator = ValidatorService()
+        results = await validator.validate_all(sandbox_code)
+
+        stages = {r.stage for r in results}
+        assert {"syntax", "static_analysis", "security_scan", "import_resolution"} <= stages
+        assert validator.all_passed(results) is True
 
     @pytest.mark.asyncio
-    async def test_multi_language_support(self):
-        """Test validation supports multiple languages."""
-        validator = Validator()
-        
-        javascript_code = """
-function add(a, b) {
-    return a + b;
-}
-"""
-        
-        # Should handle different languages
-        result = await validator.check_syntax(javascript_code, "javascript")
-        
-        # JavaScript syntax check might be skipped or handled differently
-        assert result is not None
+    async def test_validate_all_empty_code_fails(self):
+        validator = ValidatorService()
+        results = await validator.validate_all("   ")
+
+        assert len(results) == 1
+        assert results[0].stage == "generation"
+        assert results[0].passed is False
+
+    @pytest.mark.asyncio
+    async def test_validate_all_multi_file(self):
+        validator = ValidatorService()
+        files = [
+            {"filename": "main.py", "content": "import helpers\nprint(helpers.f())"},
+            {"filename": "helpers.py", "content": "def f():\n    return 1\n"},
+        ]
+
+        results = await validator.validate_all("", files=files)
+
+        assert validator.all_passed(results) is True
+
+    def test_all_passed_true_when_no_failures(self):
+        validator = ValidatorService()
+        from app.models.models import ValidationResult
+
+        results = [ValidationResult(stage="syntax", passed=True)]
+        assert validator.all_passed(results) is True
+
+    def test_all_passed_false_when_any_failure(self):
+        validator = ValidatorService()
+        from app.models.models import ValidationResult
+
+        results = [
+            ValidationResult(stage="syntax", passed=True),
+            ValidationResult(stage="security_scan", passed=False, errors=["eval used"]),
+        ]
+        assert validator.all_passed(results) is False
+
+    def test_get_errors_collects_from_all_stages(self):
+        validator = ValidatorService()
+        from app.models.models import ValidationResult
+
+        results = [
+            ValidationResult(stage="syntax", passed=False, errors=["bad syntax"]),
+            ValidationResult(stage="security_scan", passed=False, errors=["eval used"]),
+        ]
+        errors = validator.get_errors(results)
+        assert errors == ["bad syntax", "eval used"]
+
+    def test_redact_preview_hides_secrets(self):
+        preview = ValidatorService._redact_preview("api_key: sk-abc123, other=1")
+        assert "sk-abc123" not in preview
+        assert "[REDACTED]" in preview
+
+
+if __name__ == "__main__":
+    import asyncio
+
+    async def demo() -> None:
+        validator = ValidatorService()
+        result = await validator._validate_syntax("x = 1")
+        assert result.passed is True
+        print("self-check passed")
+
+    asyncio.run(demo())

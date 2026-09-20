@@ -3,7 +3,7 @@
 import asyncio
 import time
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
@@ -169,7 +169,6 @@ class CircuitBreaker:
         """
         state = await self.get_state(provider)
         if state == CircuitState.OPEN:
-            stats = self._stats[provider]
             raise CircuitBreakerOpenError(provider=provider, recovery_seconds=self.recovery_timeout)
 
     async def get_stats(self, provider: str) -> dict[str, Any]:

@@ -1,9 +1,14 @@
-"""Unit tests for circuit breaker."""
+"""Unit tests for CircuitBreaker (app/core/circuit_breaker.py).
 
-import time
+The real implementation is per-provider and fully async: state is
+addressed by provider name, not a bare CircuitBreaker attribute.
+"""
+
+import asyncio
+
 import pytest
 
-from app.core.circuit_breaker import CircuitBreaker
+from app.core.circuit_breaker import CircuitBreaker, CircuitState
 from app.core.exceptions import CircuitBreakerOpenError
 
 
@@ -11,165 +16,160 @@ class TestCircuitBreaker:
     """Test circuit breaker implementation."""
 
     def test_init(self):
-        """Test circuit breaker initialization."""
         cb = CircuitBreaker(failure_threshold=5, recovery_timeout=30)
         assert cb.failure_threshold == 5
         assert cb.recovery_timeout == 30
-        assert cb._failures == 0
-        assert cb._last_failure_time is None
 
-    def test_closed_state_allows_calls(self):
-        """Test that closed state allows calls."""
+    @pytest.mark.asyncio
+    async def test_closed_state_allows_calls(self):
         cb = CircuitBreaker()
-        
-        assert cb.is_closed() is True
-        assert cb.can_execute() is True
+        assert await cb.get_state("groq") == CircuitState.CLOSED
+        assert await cb.can_execute("groq") is True
 
-    def test_opens_after_threshold_failures(self):
-        """Test that circuit opens after threshold failures."""
+    @pytest.mark.asyncio
+    async def test_opens_after_threshold_failures(self):
         cb = CircuitBreaker(failure_threshold=3)
-        
-        # Record failures
-        cb.record_failure()
-        cb.record_failure()
-        assert cb.is_closed() is True
-        
-        cb.record_failure()
-        assert cb.is_open() is True
-        assert cb.can_execute() is False
 
-    def test_half_open_after_recovery_timeout(self):
-        """Test that circuit becomes half-open after recovery timeout."""
+        await cb.record_failure("groq")
+        await cb.record_failure("groq")
+        assert await cb.get_state("groq") == CircuitState.CLOSED
+
+        await cb.record_failure("groq")
+        assert await cb.get_state("groq") == CircuitState.OPEN
+        assert await cb.can_execute("groq") is False
+
+    @pytest.mark.asyncio
+    async def test_half_open_after_recovery_timeout(self):
         cb = CircuitBreaker(failure_threshold=1, recovery_timeout=1)
-        
-        # Open the circuit
-        cb.record_failure()
-        assert cb.is_open() is True
-        
-        # Wait for recovery timeout
-        time.sleep(1.1)
-        
-        assert cb.is_half_open() is True
-        assert cb.can_execute() is True
 
-    def test_closes_on_success_in_half_open(self):
-        """Test that circuit closes on success in half-open state."""
+        await cb.record_failure("groq")
+        assert await cb.get_state("groq") == CircuitState.OPEN
+
+        await asyncio.sleep(1.1)
+
+        assert await cb.get_state("groq") == CircuitState.HALF_OPEN
+        assert await cb.can_execute("groq") is True
+
+    @pytest.mark.asyncio
+    async def test_closes_on_success_in_half_open(self):
         cb = CircuitBreaker(failure_threshold=1, recovery_timeout=1)
-        
-        # Open the circuit
-        cb.record_failure()
-        
-        # Wait for recovery timeout
-        time.sleep(1.1)
-        
-        # Record success
-        cb.record_success()
-        
-        assert cb.is_closed() is True
-        assert cb._failures == 0
 
-    def test_reopens_on_failure_in_half_open(self):
-        """Test that circuit reopens on failure in half-open state."""
+        await cb.record_failure("groq")
+        await asyncio.sleep(1.1)
+        await cb.get_state("groq")  # transitions OPEN -> HALF_OPEN
+        await cb.record_success("groq")
+
+        assert await cb.get_state("groq") == CircuitState.CLOSED
+        stats = await cb.get_stats("groq")
+        assert stats["failure_count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_reopens_on_failure_in_half_open(self):
         cb = CircuitBreaker(failure_threshold=1, recovery_timeout=1)
-        
-        # Open the circuit
-        cb.record_failure()
-        
-        # Wait for recovery timeout
-        time.sleep(1.1)
-        
-        # Record failure in half-open state
-        cb.record_failure()
-        
-        assert cb.is_open() is True
 
-    def test_failure_count_resets_on_success(self):
-        """Test that failure count resets on success."""
+        await cb.record_failure("groq")
+        await asyncio.sleep(1.1)
+        await cb.get_state("groq")  # transitions OPEN -> HALF_OPEN
+        await cb.record_failure("groq")
+
+        assert await cb.get_state("groq") == CircuitState.OPEN
+
+    @pytest.mark.asyncio
+    async def test_failure_count_resets_on_success(self):
         cb = CircuitBreaker(failure_threshold=3)
-        
-        # Record some failures
-        cb.record_failure()
-        cb.record_failure()
-        assert cb._failures == 2
-        
-        # Record success
-        cb.record_success()
-        assert cb._failures == 0
 
-    def test_context_manager_success(self):
-        """Test context manager with successful execution."""
-        cb = CircuitBreaker()
-        
-        with cb.execute():
-            pass  # Success
-        
-        assert cb.is_closed() is True
+        await cb.record_failure("groq")
+        await cb.record_failure("groq")
+        stats = await cb.get_stats("groq")
+        assert stats["failure_count"] == 2
 
-    def test_context_manager_failure(self):
-        """Test context manager with failed execution."""
+        await cb.record_success("groq")
+        stats = await cb.get_stats("groq")
+        assert stats["failure_count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_check_and_raise_when_open(self):
         cb = CircuitBreaker(failure_threshold=1)
-        
-        try:
-            with cb.execute():
-                raise Exception("Execution failed")
-        except Exception:
-            pass
-        
-        assert cb.is_open() is True
 
-    def test_raises_circuit_breaker_open_error(self):
-        """Test that open circuit raises CircuitBreakerOpenError."""
-        cb = CircuitBreaker(failure_threshold=1)
-        
-        # Open the circuit
-        cb.record_failure()
-        
+        await cb.record_failure("groq")
+
         with pytest.raises(CircuitBreakerOpenError):
-            with cb.execute():
-                pass
+            await cb.check_and_raise("groq")
 
-    def test_multiple_instances_independent(self):
-        """Test that multiple circuit breaker instances are independent."""
+    @pytest.mark.asyncio
+    async def test_check_and_raise_allows_when_closed(self):
+        cb = CircuitBreaker()
+        await cb.check_and_raise("groq")  # must not raise
+
+    @pytest.mark.asyncio
+    async def test_providers_are_independent(self):
+        cb = CircuitBreaker(failure_threshold=2)
+
+        await cb.record_failure("groq")
+        await cb.record_failure("groq")
+
+        assert await cb.get_state("groq") == CircuitState.OPEN
+        assert await cb.get_state("anthropic") == CircuitState.CLOSED
+
+    @pytest.mark.asyncio
+    async def test_multiple_instances_independent(self):
         cb1 = CircuitBreaker(failure_threshold=2)
         cb2 = CircuitBreaker(failure_threshold=2)
-        
-        # Fail cb1
-        cb1.record_failure()
-        cb1.record_failure()
-        
-        assert cb1.is_open() is True
-        assert cb2.is_closed() is True
 
-    def test_state_transitions(self):
-        """Test state machine transitions."""
+        await cb1.record_failure("groq")
+        await cb1.record_failure("groq")
+
+        assert await cb1.get_state("groq") == CircuitState.OPEN
+        assert await cb2.get_state("groq") == CircuitState.CLOSED
+
+    @pytest.mark.asyncio
+    async def test_state_transitions(self):
         cb = CircuitBreaker(failure_threshold=2, recovery_timeout=1)
-        
-        # Initial state: CLOSED
-        assert cb.state == "CLOSED"
-        
-        # Transition to OPEN
-        cb.record_failure()
-        cb.record_failure()
-        assert cb.state == "OPEN"
-        
-        # Transition to HALF_OPEN
-        time.sleep(1.1)
-        assert cb.state == "HALF_OPEN"
-        
-        # Transition back to CLOSED
-        cb.record_success()
-        assert cb.state == "CLOSED"
 
-    def test_get_stats(self):
-        """Test statistics retrieval."""
+        assert await cb.get_state("groq") == CircuitState.CLOSED
+
+        await cb.record_failure("groq")
+        await cb.record_failure("groq")
+        assert await cb.get_state("groq") == CircuitState.OPEN
+
+        await asyncio.sleep(1.1)
+        assert await cb.get_state("groq") == CircuitState.HALF_OPEN
+
+        await cb.record_success("groq")
+        assert await cb.get_state("groq") == CircuitState.CLOSED
+
+    @pytest.mark.asyncio
+    async def test_get_stats(self):
         cb = CircuitBreaker()
-        
-        cb.record_failure()
-        cb.record_success()
-        cb.record_failure()
-        
-        stats = cb.get_stats()
-        
-        assert stats["state"] == "CLOSED"
-        assert stats["failures"] == 0  # Reset on success
+
+        await cb.record_failure("groq")
+        await cb.record_success("groq")
+        await cb.record_failure("groq")
+
+        stats = await cb.get_stats("groq")
+
+        assert stats["state"] == "closed"
+        assert stats["failure_count"] == 1  # reset by the success, then +1
         assert stats["total_failures"] >= 2
+
+    @pytest.mark.asyncio
+    async def test_reset_clears_state(self):
+        cb = CircuitBreaker(failure_threshold=1)
+
+        await cb.record_failure("groq")
+        assert await cb.get_state("groq") == CircuitState.OPEN
+
+        await cb.reset("groq")
+        assert await cb.get_state("groq") == CircuitState.CLOSED
+
+
+if __name__ == "__main__":
+
+    async def demo() -> None:
+        cb = CircuitBreaker(failure_threshold=1)
+        assert await cb.can_execute("demo") is True
+        await cb.record_failure("demo")
+        assert await cb.can_execute("demo") is False
+        print("self-check passed")
+
+    asyncio.run(demo())

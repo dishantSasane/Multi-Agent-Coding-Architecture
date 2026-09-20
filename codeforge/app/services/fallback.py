@@ -1,6 +1,5 @@
 """Fallback Service - Multiple fallback strategies."""
 
-import asyncio
 from typing import Any, Callable
 
 import structlog

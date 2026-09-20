@@ -2,7 +2,6 @@
 
 import os
 from functools import lru_cache
-from typing import Any
 
 from pydantic import Field, PostgresDsn, RedisDsn
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -37,6 +36,7 @@ class Settings(BaseSettings):
     kimi_api_key: str | None = Field(default=None, description="Kimi API key")
     qwen_api_key: str | None = Field(default=None, description="Qwen API key")
     groq_api_key: str | None = Field(default=None, description="Groq API key")
+    gemini_api_key: str | None = Field(default=None, description="Google AI Studio API key")
     groq_model: str = Field(default="openai/gpt-oss-120b", description="Groq model slug")
 
     # OpenAI-compatible base URL override (e.g. https://openrouter.ai/api/v1)
@@ -99,6 +99,7 @@ class Settings(BaseSettings):
             "kimi": self.kimi_api_key,
             "qwen": self.qwen_api_key,
             "groq": self.groq_api_key,
+            "gemini": self.gemini_api_key,
         }
 
     # CORS
@@ -135,6 +136,7 @@ def _export_llm_keys_to_env(s: Settings) -> None:
     key_map = {
         "GROQ_API_KEY":       s.groq_api_key,
         "OPENROUTER_API_KEY": s.openrouter_api_key,
+        "GEMINI_API_KEY":     s.gemini_api_key,
         "OPENAI_API_KEY":     s.openai_api_key,
         "ANTHROPIC_API_KEY":  s.anthropic_api_key,
     }

@@ -4,6 +4,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException
 
+from app.core.exceptions import TaskNotFoundError
 from app.models.models import TaskStatusResponse
 from app.services.orchestrator import get_orchestrator
 
@@ -27,5 +28,7 @@ async def trigger_generation(
         task = await orchestrator.trigger_generation(task_id)
         return TaskStatusResponse(**task.to_dict())
 
+    except TaskNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e

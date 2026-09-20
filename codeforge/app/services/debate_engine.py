@@ -4,7 +4,6 @@ import asyncio
 from typing import Any
 
 import structlog
-from litellm import acompletion
 
 from app.models.models import DebateResult, ModelOutput
 from app.services.model_router import ModelRouterService

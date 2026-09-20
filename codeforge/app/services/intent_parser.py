@@ -9,6 +9,7 @@ import structlog
 from litellm import acompletion
 
 from app.config import get_settings
+from app.core.constants import PROVIDER_MODELS, ModelProvider
 from app.core.exceptions import IntentParsingError
 from app.models.models import IntentAnalysis
 
@@ -219,12 +220,14 @@ Output ONLY valid JSON, no markdown or explanations."""
         Returns:
             Response content string.
         """
-        # LiteLLM reads GROQ_API_KEY from the environment.
+        # Intent goes to Gemini so generation (Groq/OpenRouter/Gemini ensemble)
+        # doesn't share this call's quota. LiteLLM reads GEMINI_API_KEY from env.
         # No max_tokens limit so the model returns a complete JSON response.
         response = await acompletion(
-            model=f"groq/{self.settings.groq_model}",
+            model=f"gemini/{PROVIDER_MODELS[ModelProvider.GEMINI][0]}",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
+            num_retries=3,  # Gemini 503 "high demand" spikes are transient
         )
         return response.choices[0].message.content.strip()
 
@@ -238,28 +241,3 @@ Output ONLY valid JSON, no markdown or explanations."""
             True if clarification is needed.
         """
         return intent.confidence_score < 0.8 or len(intent.clarifying_questions) > 0
-
-    def get_summary(self, intent: IntentAnalysis) -> str:
-        """Generate a human-readable summary of the intent.
-
-        Args:
-            intent: Parsed intent analysis.
-
-        Returns:
-            Summary string for user confirmation.
-        """
-        lines = [
-            f"**Summary:** {intent.summary}",
-            f"**Task Type:** {intent.task_type}",
-            f"**Tech Stack:** {', '.join(intent.tech_stack) or 'Not specified'}",
-            f"**Requirements:** {len(intent.requirements)} identified",
-            f"**Edge Cases:** {len(intent.edge_cases)} identified",
-            f"**Security Concerns:** {len(intent.security_concerns)} identified",
-        ]
-
-        if intent.clarifying_questions:
-            lines.append("\n**Clarifying Questions:**")
-            for i, q in enumerate(intent.clarifying_questions, 1):
-                lines.append(f"{i}. {q}")
-
-        return "\n".join(lines)

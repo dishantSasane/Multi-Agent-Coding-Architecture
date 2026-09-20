@@ -30,6 +30,7 @@ class ModelProvider(StrEnum):
     KIMI = "kimi"
     QWEN = "qwen"
     GROQ = "groq"
+    GEMINI = "gemini"  # Google AI Studio free tier
 
 
 class TaskType(StrEnum):
@@ -93,11 +94,22 @@ TASK_TYPE_MODEL_MAP: dict[TaskType, ModelProvider] = {
     TaskType.TESTING:        ModelProvider.GROQ,
 }
 
+# OpenRouter: only ":free" models, so a paid model can never be picked.
+# Tried in order on 429/503 — free endpoints go down constantly.
+OPENROUTER_FREE_POOL = [
+    "qwen/qwen3.8-27b:free",
+    "deepseek/deepseek-v4-flash-0731:free",
+    "cohere/north-mini-code:free",
+    "google/gemma-4-31b-it:free",
+]
+OPENROUTER_FREE_MODEL = OPENROUTER_FREE_POOL[0]
+
 # Model names per provider.
 # LiteLLM format for Groq: "groq/<model>" — reads GROQ_API_KEY from env.
 PROVIDER_MODELS: dict[ModelProvider, list[str]] = {
     ModelProvider.GROQ:      ["openai/gpt-oss-120b"],
-    ModelProvider.OPENROUTER: ["free"],
+    ModelProvider.OPENROUTER: [OPENROUTER_FREE_MODEL],
+    ModelProvider.GEMINI:    ["gemini-3.1-flash-lite"],
     ModelProvider.OPENAI:    ["gpt-4o", "gpt-4-turbo", "gpt-3.5-turbo"],
     ModelProvider.ANTHROPIC: ["claude-sonnet-5", "claude-opus-5", "claude-haiku-4-5-20251001"],
     ModelProvider.KIMI:      ["kimi-k1.5"],
@@ -105,4 +117,4 @@ PROVIDER_MODELS: dict[ModelProvider, list[str]] = {
 }
 
 # Kept for backward-compat import (no longer used for routing).
-OPENROUTER_TASK_MODEL_MAP: dict[TaskType, str] = {t: "free" for t in TaskType}
+OPENROUTER_TASK_MODEL_MAP: dict[TaskType, str] = {t: OPENROUTER_FREE_MODEL for t in TaskType}

@@ -1,9 +1,7 @@
 """Sandbox Service - Secure Docker-based code execution."""
 
 import asyncio
-import io
 from pathlib import Path, PurePosixPath
-import tarfile
 import tempfile
 from typing import Any
 

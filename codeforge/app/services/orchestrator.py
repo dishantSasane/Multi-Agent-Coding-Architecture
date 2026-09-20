@@ -1,6 +1,5 @@
 """Orchestrator Service - Main state machine coordinating all services."""
 
-import asyncio
 import re
 from datetime import datetime, timezone
 from typing import Any
@@ -13,13 +12,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.core.exceptions import (
     CodeForgeException,
-    ConfirmationRequiredError,
     SelfCorrectionExhaustedError,
     TaskNotFoundError,
 )
 from app.models.database import get_session_maker
 from app.models.enums import ConfirmationStatusEnum, TaskStatusEnum
-from app.models.models import DebateResult, IntentAnalysis, ModelOutput
+from app.models.models import DebateResult, IntentAnalysis, ModelOutput, ValidationResult
 from app.models.orm_models import Task
 from app.services.debate_engine import DebateEngineService
 from app.services.ensemble import EnsembleService
@@ -29,7 +27,6 @@ from app.services.model_router import ModelRouterService
 from app.services.sandbox import SandboxService
 from app.services.self_correction import SelfCorrectionService
 from app.services.synthesis import SynthesisService
-from app.services.task_decomposer import TaskDecomposerService
 from app.services.validator import ValidatorService
 from app.services.code_extractor import CodeExtractionError, extract_code_files, looks_like_unparsed_configuration
 
@@ -46,7 +43,6 @@ class OrchestratorService:
 
         # Initialize all services
         self.intent_parser = IntentParserService()
-        self.task_decomposer = TaskDecomposerService()
         self.model_router = ModelRouterService()
         self.ensemble = EnsembleService()
         self.debate_engine = DebateEngineService()
@@ -113,7 +109,8 @@ class OrchestratorService:
             try:
                 # Parse intent (use local Ollama if configured)
                 intent = await self.intent_parser.parse_intent(
-                    query=task.user_query,
+                    query=task.user_query
+                    + (f"\n\nUser clarifications: {task.user_clarifications}" if task.user_clarifications else ""),
                     context=task.intent_analysis or {},
                     use_local=self.settings.use_local_for_intent,
                 )
@@ -316,8 +313,8 @@ class OrchestratorService:
             if not outputs:
                 raise CodeForgeException("No model outputs to evaluate")
 
-            # Heuristic scoring: length + structure + keyword checks
-            best = self._heuristic_vote(outputs)
+            # Prefer candidates that actually validate, then score among those.
+            best = self._heuristic_vote(await self._validated_outputs(outputs))
 
             # Store as pseudo-debate result for compatibility
             task.debate_result = DebateResult(
@@ -337,6 +334,33 @@ class OrchestratorService:
             )
 
             return task
+
+    async def _validated_outputs(self, outputs: list[ModelOutput]) -> list[ModelOutput]:
+        """Drop ensemble candidates that fail validation.
+
+        Validation is local (AST only, no API calls), so every candidate can be
+        checked before one is chosen. Returns all outputs unchanged when none
+        pass, so a failing task still reports real validation errors.
+        """
+        passing = []
+        for output in outputs:
+            files = [f.model_dump() for f in output.files] if output.files else None
+            try:
+                results = await self.validator.validate_all(code=output.code, files=files)
+            except Exception as e:  # noqa: BLE001 - a candidate we cannot check is not preferred
+                logger.warning(
+                    "candidate_validation_errored", provider=output.provider, error=str(e)
+                )
+                continue
+            if self.validator.all_passed(results):
+                passing.append(output)
+
+        logger.info(
+            "candidates_validated",
+            total=len(outputs),
+            passing=[o.provider for o in passing],
+        )
+        return passing or outputs
 
     def _heuristic_vote(self, outputs: list[ModelOutput]) -> ModelOutput:
         """Score outputs without LLM calls.
@@ -515,6 +539,29 @@ class OrchestratorService:
                         task.status = TaskStatusEnum.CORRECTING
                         if self.settings.max_correction_attempts > 0:
                             task.correction_attempts += 1
+                            # Actually attempt a fix — previously this branch
+                            # only incremented the counter and looped back to
+                            # re-validate the *same* unchanged code, so the
+                            # correction loop always failed after
+                            # max_correction_attempts iterations regardless
+                            # of whether the code was fixable.
+                            requirements = (
+                                IntentAnalysis(**task.intent_analysis).requirements
+                                if task.intent_analysis
+                                else []
+                            )
+                            try:
+                                task.synthesized_code = await self.self_correction.correct_code(
+                                    original_code=code,
+                                    validation_results=validation_results,
+                                    requirements=requirements,
+                                )
+                            except Exception as correction_error:
+                                logger.warning(
+                                    "self_correction_attempt_failed",
+                                    task_id=str(task_id),
+                                    error=str(correction_error),
+                                )
 
                 await session.commit()
 
@@ -566,7 +613,30 @@ class OrchestratorService:
                     task.completed_at = datetime.now(timezone.utc)
                 else:
                     task.status = TaskStatusEnum.CORRECTING
-                    task.correction_attempts += 1
+                    if self.settings.max_correction_attempts > 0:
+                        task.correction_attempts += 1
+                        sandbox_error = ValidationResult(
+                            stage="sandbox_execution",
+                            passed=False,
+                            errors=[result.get("stderr") or "Sandbox execution failed"],
+                        )
+                        requirements = (
+                            IntentAnalysis(**task.intent_analysis).requirements
+                            if task.intent_analysis
+                            else []
+                        )
+                        try:
+                            task.synthesized_code = await self.self_correction.correct_code(
+                                original_code=task.synthesized_code or "",
+                                validation_results=[sandbox_error],
+                                requirements=requirements,
+                            )
+                        except Exception as correction_error:
+                            logger.warning(
+                                "self_correction_attempt_failed",
+                                task_id=str(task_id),
+                                error=str(correction_error),
+                            )
 
                 await session.commit()
 
@@ -597,8 +667,12 @@ class OrchestratorService:
         logger.info("running_full_pipeline", task_id=str(task_id))
 
         try:
-            # Step 1: Analyze intent
-            await self.analyze_intent(task_id)
+            # Step 1: Analyze intent (skipped when the user already confirmed it,
+            # otherwise a resumed run would ask for confirmation again)
+            async with self.session_maker() as session:
+                existing = await self._get_task(session, task_id)
+            if not existing or existing.status != TaskStatusEnum.CONFIRMED:
+                await self.analyze_intent(task_id)
 
             # Step 2: Check if confirmation needed
             async with self.session_maker() as session:
@@ -722,7 +796,7 @@ class OrchestratorService:
     _MULTI_FILE_FRAMEWORKS = frozenset({"fastapi", "django", "flask", "starlette"})
     _MULTI_FILE_KEYWORDS = re.compile(
         r"\b(separate files?|multiple files?|models?\.py|routes?\.py|views?\.py|"
-        r"main\.py|database\.py|schemas?\.py|crud\.py|app\.py)\b",
+        r"main\.py|database\.py|schemas?\.py|crud\.py|app\.py|tests?|pytest)\b",
         re.IGNORECASE,
     )
 
@@ -836,7 +910,18 @@ You may also use this format:
 FILE: path/to/file.ext
 <complete file content>
 
-Never truncate or skip files. Generate complete content for every file."""
+Never truncate or skip files. Generate complete content for every file.
+
+Hard rules — output is automatically validated and rejected if it breaks any of them:
+- Never call eval(), exec(), os.system() or __import__(). To evaluate user-typed math,
+  parse it with the ast module and allow only numbers and + - * / ** unary minus.
+- Never use a bare `except:`; catch specific exceptions.
+- Use the logging module, not print(), in library and server code.
+- Keep every line under 200 characters.
+- Import only the standard library or packages you list in requirements.txt.
+- Deliver exactly what was asked: if the request names a stack or files (e.g. a FastAPI
+  backend plus a JavaScript frontend), produce those files; otherwise use the simplest
+  design that works."""
 
     @staticmethod
     def _parse_code_files(code: str) -> list[dict] | None:

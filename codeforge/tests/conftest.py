@@ -27,7 +27,10 @@ def event_loop() -> Generator[asyncio.AbstractEventLoop, None, None]:
 @pytest_asyncio.fixture(scope="function")
 async def db_engine():
     """Create test database engine."""
-    test_db_url = "postgresql+asyncpg://codeforge:codeforge_password@localhost:5432/codeforge_test"
+    test_db_url = os.environ.get(
+        "TEST_DATABASE_URL",
+        "postgresql+asyncpg://codeforge:codeforge_password@localhost:5432/codeforge_test",
+    )
     
     engine = create_async_engine(
         test_db_url,

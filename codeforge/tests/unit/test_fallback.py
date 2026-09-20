@@ -1,196 +1,161 @@
-"""Unit tests for fallback system."""
+"""Unit tests for FallbackService (app/services/fallback.py)."""
+
+from unittest.mock import AsyncMock
 
 import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
 
-from app.core.exceptions import ModelUnavailableError
-from app.models.enums import ModelProvider
-from app.services.fallback import FallbackStrategy
+from app.core.constants import ModelProvider
+from app.core.exceptions import CodeForgeException
+from app.services.fallback import FallbackService
 
 
-class TestFallback:
-    """Test fallback system."""
+class TestFallbackService:
+    """Test fallback strategies."""
 
     def test_init(self):
-        """Test fallback strategy initialization."""
-        strategy = FallbackStrategy()
-        assert strategy is not None
+        """FallbackService wires up a ModelRouterService."""
+        service = FallbackService()
+        assert service.router is not None
 
     @pytest.mark.asyncio
-    async def test_model_fallback_chain(self, sample_model_output):
-        """Test fallback through model chain."""
-        strategy = FallbackStrategy()
-        
-        call_order = []
-        
-        def mock_call(provider, *args, **kwargs):
-            call_order.append(provider)
-            if provider == ModelProvider.OPENAI:
-                raise ModelUnavailableError("OpenAI down")
-            return sample_model_output
-        
-        with patch.object(strategy, "call_model") as mock_model:
-            mock_model.side_effect = mock_call
-            
-            result = await strategy.execute_with_model_fallback(
-                prompt="test",
-                preferred_models=[ModelProvider.OPENAI, ModelProvider.ANTHROPIC],
+    async def test_try_with_fallback_uses_primary_when_it_succeeds(self):
+        service = FallbackService()
+        primary = AsyncMock(return_value="primary result")
+        fallback = AsyncMock(return_value="fallback result")
+
+        result = await service.try_with_fallback(primary, [fallback])
+
+        assert result == "primary result"
+        fallback.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_try_with_fallback_falls_back_on_primary_failure(self):
+        service = FallbackService()
+        primary = AsyncMock(side_effect=RuntimeError("primary down"))
+        fallback = AsyncMock(return_value="fallback result")
+
+        result = await service.try_with_fallback(primary, [fallback])
+
+        assert result == "fallback result"
+        fallback.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_try_with_fallback_raises_when_all_fail(self):
+        service = FallbackService()
+        primary = AsyncMock(side_effect=RuntimeError("down"))
+        fallback = AsyncMock(side_effect=RuntimeError("also down"))
+
+        with pytest.raises(CodeForgeException):
+            await service.try_with_fallback(primary, [fallback])
+
+    @pytest.mark.asyncio
+    async def test_model_fallback_walks_provider_chain(self):
+        service = FallbackService()
+        service.router.get_fallback_chain = lambda primary: [ModelProvider.ANTHROPIC]
+        service.router.execute_with_model = AsyncMock(
+            side_effect=[RuntimeError("openrouter down"), {"content": "ok"}]
+        )
+
+        result = await service.model_fallback(
+            messages=[{"role": "user", "content": "hi"}],
+            preferred_provider=ModelProvider.OPENROUTER,
+        )
+
+        assert result == {"content": "ok"}
+        assert service.router.execute_with_model.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_model_fallback_raises_when_all_providers_fail(self):
+        service = FallbackService()
+        service.router.get_fallback_chain = lambda primary: []
+        service.router.execute_with_model = AsyncMock(side_effect=RuntimeError("down"))
+
+        with pytest.raises(CodeForgeException):
+            await service.model_fallback(
+                messages=[{"role": "user", "content": "hi"}],
+                preferred_provider=ModelProvider.OPENROUTER,
             )
-            
-            assert result is not None
-            assert ModelProvider.OPENAI in call_order
-            assert ModelProvider.ANTHROPIC in call_order
 
     @pytest.mark.asyncio
     async def test_strategy_fallback_ensemble_to_single(self):
-        """Test fallback from ensemble to single model."""
-        strategy = FallbackStrategy()
-        
-        with patch.object(strategy, "run_ensemble") as mock_ensemble:
-            mock_ensemble.side_effect = Exception("Ensemble failed")
-            
-            with patch.object(strategy, "run_single_model") as mock_single:
-                mock_single.return_value = {"code": "single model result"}
-                
-                result = await strategy.execute_with_strategy_fallback(
-                    task_id="test-task",
-                    use_ensemble=True,
-                )
-                
-                assert result is not None
-                mock_ensemble.assert_called_once()
-                mock_single.assert_called_once()
+        service = FallbackService()
+        ensemble = AsyncMock(side_effect=RuntimeError("ensemble failed"))
+        single = AsyncMock(return_value={"code": "single model result"})
+
+        result = await service.strategy_fallback(ensemble, single)
+
+        assert result == {"code": "single model result"}
+        ensemble.assert_called_once()
+        single.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_sandbox_fallback_to_subprocess(self, sandbox_code):
-        """Test fallback from Docker to subprocess."""
-        strategy = FallbackStrategy()
-        
-        with patch.object(strategy, "execute_in_docker") as mock_docker:
-            mock_docker.side_effect = Exception("Docker unavailable")
-            
-            with patch.object(strategy, "execute_in_subprocess") as mock_subprocess:
-                mock_subprocess.return_value = {
-                    "success": True,
-                    "exit_code": 0,
-                    "stdout": "5\n",
-                }
-                
-                result = await strategy.execute_with_sandbox_fallback(sandbox_code)
-                
-                assert result["success"] is True
-                mock_docker.assert_called_once()
-                mock_subprocess.assert_called_once()
+    async def test_sandbox_fallback_to_subprocess(self):
+        service = FallbackService()
+        docker_exec = AsyncMock(side_effect=RuntimeError("docker unavailable"))
+        subprocess_exec = AsyncMock(return_value={"success": True, "exit_code": 0})
+
+        result = await service.sandbox_fallback("print(1)", docker_exec, subprocess_exec)
+
+        assert result["success"] is True
+        docker_exec.assert_called_once()
+        subprocess_exec.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_validation_fallback_relaxed_mode(self, invalid_code):
-        """Test fallback to relaxed validation mode."""
-        strategy = FallbackStrategy()
-        
-        with patch.object(strategy, "validate_strict") as mock_strict:
-            mock_strict.return_value = {
-                "passed": False,
-                "errors": ["Minor style issue"],
-            }
-            
-            with patch.object(strategy, "validate_relaxed") as mock_relaxed:
-                mock_relaxed.return_value = {
-                    "passed": True,
-                    "warnings": ["Style issues ignored"],
-                }
-                
-                result = await strategy.execute_with_validation_fallback(invalid_code)
-                
-                assert result["passed"] is True
-                assert "warnings" in result
+    async def test_sandbox_fallback_synthetic_failure_without_subprocess(self):
+        service = FallbackService()
+        docker_exec = AsyncMock(side_effect=RuntimeError("docker unavailable"))
+
+        result = await service.sandbox_fallback("print(1)", docker_exec)
+
+        assert result["success"] is False
+        assert "Docker execution failed" in result["stderr"]
 
     @pytest.mark.asyncio
-    async def test_circuit_breaker_fallback_queues_job(self):
-        """Test that jobs are queued when circuit breaker is open."""
-        strategy = FallbackStrategy()
-        
-        with patch.object(strategy, "is_circuit_open") as mock_circuit:
-            mock_circuit.return_value = True
-            
-            with patch.object(strategy, "queue_for_retry") as mock_queue:
-                mock_queue.return_value = {"queued": True, "retry_at": "2024-01-01T00:00:00Z"}
-                
-                result = await strategy.execute_with_circuit_breaker_fallback(
-                    ModelProvider.OPENAI,
-                    "test prompt",
-                )
-                
-                assert result["queued"] is True
-                mock_queue.assert_called_once()
+    async def test_validation_fallback_relaxed_mode(self):
+        service = FallbackService()
+        strict = AsyncMock(side_effect=RuntimeError("strict failed"))
+        relaxed = AsyncMock(return_value={"passed": True, "warnings": ["style"]})
+
+        result, used_relaxed = await service.validation_fallback(strict, relaxed)
+
+        assert used_relaxed is True
+        assert result["passed"] is True
 
     @pytest.mark.asyncio
-    async def test_all_fallbacks_exhausted_raises_error(self):
-        """Test error when all fallbacks are exhausted."""
-        strategy = FallbackStrategy()
-        
-        with patch.object(strategy, "call_model") as mock_model:
-            mock_model.side_effect = ModelUnavailableError("All models down")
-            
-            with pytest.raises(ModelUnavailableError):
-                await strategy.execute_with_model_fallback(
-                    prompt="test",
-                    preferred_models=[ModelProvider.OPENAI, ModelProvider.ANTHROPIC],
-                )
+    async def test_circuit_breaker_fallback_uses_alternate_when_open(self):
+        service = FallbackService()
+        service.router.circuit_breaker.can_execute = AsyncMock(return_value=False)
+        service.model_fallback = AsyncMock(return_value={"content": "alt"})
+
+        result = await service.circuit_breaker_fallback(
+            ModelProvider.OPENROUTER, [{"role": "user", "content": "hi"}]
+        )
+
+        assert result == {"content": "alt"}
+        service.model_fallback.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_fallback_logs_attempts(self, sample_model_output):
-        """Test that fallback attempts are logged."""
-        strategy = FallbackStrategy()
-        
-        call_log = []
-        
-        def mock_call(provider, *args, **kwargs):
-            call_log.append({"provider": provider, "attempt": len(call_log) + 1})
-            if provider == ModelProvider.OPENAI:
-                raise ModelUnavailableError("First choice down")
-            return sample_model_output
-        
-        with patch.object(strategy, "call_model") as mock_model:
-            mock_model.side_effect = mock_call
-            
-            with patch.object(strategy.logger, "info") as mock_logger:
-                result = await strategy.execute_with_model_fallback(
-                    prompt="test",
-                    preferred_models=[ModelProvider.OPENAI, ModelProvider.ANTHROPIC],
-                )
-                
-                # Logger should have recorded the fallback
-                assert mock_logger.call_count >= 1
+    async def test_circuit_breaker_fallback_uses_preferred_when_closed(self):
+        service = FallbackService()
+        service.router.circuit_breaker.can_execute = AsyncMock(return_value=True)
+        service.router.execute_with_model = AsyncMock(return_value={"content": "preferred"})
 
-    def test_get_fallback_priority(self):
-        """Test fallback priority ordering."""
-        strategy = FallbackStrategy()
-        
-        # OpenAI should fall back to Anthropic first
-        priority = strategy.get_fallback_priority(ModelProvider.OPENAI)
-        
-        assert ModelProvider.ANTHROPIC in priority
-        assert priority.index(ModelProvider.ANTHROPIC) < priority.index(ModelProvider.QWEN)
+        result = await service.circuit_breaker_fallback(
+            ModelProvider.OPENROUTER, [{"role": "user", "content": "hi"}]
+        )
 
-    @pytest.mark.asyncio
-    async def test_graceful_degradation_partial_success(self):
-        """Test graceful degradation with partial success."""
-        strategy = FallbackStrategy()
-        
-        results = []
-        
-        async def mock_parallel_call(provider):
-            if provider == ModelProvider.OPENAI:
-                raise ModelUnavailableError("Down")
-            return {"provider": provider, "code": f"result_{provider}"}
-        
-        with patch.object(strategy, "call_model_async") as mock_call:
-            mock_call.side_effect = mock_parallel_call
-            
-            providers = [ModelProvider.OPENAI, ModelProvider.ANTHROPIC, ModelProvider.QWEN]
-            
-            result = await strategy.execute_with_graceful_degradation(providers)
-            
-            # Should have results from successful providers
-            assert len(result["successful"]) == 2
-            assert len(result["failed"]) == 1
+        assert result == {"content": "preferred"}
+        service.router.execute_with_model.assert_called_once()
+
+
+if __name__ == "__main__":
+    import asyncio
+
+    async def demo() -> None:
+        service = FallbackService()
+        assert service.router is not None
+        result = await service.try_with_fallback(AsyncMock(return_value="ok"), [])
+        assert result == "ok"
+        print("self-check passed")
+
+    asyncio.run(demo())

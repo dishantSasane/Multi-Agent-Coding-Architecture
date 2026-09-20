@@ -2,17 +2,19 @@
 
 import time
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
 import structlog
 from litellm import acompletion
+from litellm.exceptions import NotFoundError, RateLimitError, ServiceUnavailableError
 
 from app.config import get_settings
 from app.core.circuit_breaker import get_circuit_breaker
 from app.core.constants import (
     DEFAULT_MODEL_TIMEOUT,
+    OPENROUTER_FREE_POOL,
     OPENROUTER_TASK_MODEL_MAP,
     PROVIDER_MODELS,
     REASONING_MODEL_TIMEOUT,
@@ -20,7 +22,7 @@ from app.core.constants import (
     ModelProvider,
     TaskType,
 )
-from app.core.exceptions import CircuitBreakerOpenError, ModelUnavailableError
+from app.core.exceptions import ModelUnavailableError
 
 logger = structlog.get_logger(__name__)
 
@@ -48,6 +50,7 @@ class ModelRouterService:
         self._provider_priority: dict[ModelProvider, int] = {
             ModelProvider.GROQ: 1,
             ModelProvider.OPENROUTER: 2,
+            ModelProvider.GEMINI: 2,
             ModelProvider.ANTHROPIC: 3,
             ModelProvider.OPENAI: 4,
             ModelProvider.QWEN: 5,
@@ -114,7 +117,7 @@ class ModelRouterService:
         }
         return provider_model_map.get(provider, f"{provider.value}/{model}")
 
-    def get_optimal_provider(self, task_type: TaskType) -> ModelProvider:
+    async def get_optimal_provider(self, task_type: TaskType) -> ModelProvider:
         """Get the optimal provider for a task type.
 
         Args:
@@ -127,18 +130,18 @@ class ModelRouterService:
         default_provider = TASK_TYPE_MODEL_MAP.get(task_type, ModelProvider.OPENAI)
 
         # Check if circuit breaker is open
-        if not self.circuit_breaker.can_execute(default_provider.value):
+        if not await self.circuit_breaker.can_execute(default_provider.value):
             logger.warning(
                 "circuit_breaker_open_fallback",
                 provider=default_provider.value,
                 task_type=task_type.value,
             )
             # Fallback to next available provider
-            return self._get_fallback_provider(default_provider)
+            return await self._get_fallback_provider(default_provider)
 
         return default_provider
 
-    def _get_fallback_provider(self, excluded: ModelProvider) -> ModelProvider:
+    async def _get_fallback_provider(self, excluded: ModelProvider) -> ModelProvider:
         """Get fallback provider excluding the given one.
 
         Args:
@@ -153,7 +156,7 @@ class ModelRouterService:
         )
 
         for provider in sorted_providers:
-            if self.circuit_breaker.can_execute(provider.value):
+            if await self.circuit_breaker.can_execute(provider.value):
                 return provider
 
         # If all circuits are open, return the first one anyway
@@ -163,7 +166,7 @@ class ModelRouterService:
         self,
         provider: ModelProvider,
         messages: list[dict[str, str]],
-        max_tokens: int = 2000,
+        max_tokens: int = 6500,  # Groq free tier: prompt + max_tokens must stay under 8000 TPM
         temperature: float = 0.7,
         timeout: int | None = None,
         use_local: bool = False,
@@ -194,14 +197,13 @@ class ModelRouterService:
         await self.circuit_breaker.check_and_raise(provider.value)
 
         model_name = self._get_model_for_provider(provider, task_type)
-        litellm_model = self._map_provider_to_litellm(provider, model_name)
-
         # Determine timeout — Groq, Anthropic and OpenAI all need the longer
         # 120-second window for code generation tasks.
         if timeout is None:
             timeout = (
                 REASONING_MODEL_TIMEOUT
-                if provider in [ModelProvider.GROQ, ModelProvider.ANTHROPIC, ModelProvider.OPENAI]
+                if provider in [ModelProvider.GROQ, ModelProvider.ANTHROPIC, ModelProvider.OPENAI,
+                            ModelProvider.OPENROUTER, ModelProvider.GEMINI]
                 else DEFAULT_MODEL_TIMEOUT
             )
 
@@ -209,12 +211,24 @@ class ModelRouterService:
         stats_key = f"{provider.value}:{model_name}"
 
         try:
-            response = await acompletion(
-                model=litellm_model,
-                messages=messages,
-                temperature=temperature,
-                request_timeout=timeout,
-            )
+            # OpenRouter: walk the free pool on 429/503. Other providers: one model.
+            candidates = OPENROUTER_FREE_POOL if provider == ModelProvider.OPENROUTER else [model_name]
+            for i, model_name in enumerate(candidates):
+                try:
+                    response = await acompletion(
+                        model=self._map_provider_to_litellm(provider, model_name),
+                        messages=messages,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                        request_timeout=timeout,
+                        num_retries=2,  # same-model retry on 429/503
+                    )
+                    break
+                except (RateLimitError, ServiceUnavailableError, NotFoundError):
+                    if i == len(candidates) - 1:
+                        raise
+                    logger.warning("free_model_busy_trying_next", model=model_name)
+            stats_key = f"{provider.value}:{model_name}"
 
             latency_ms = int((time.time() - start_time) * 1000)
 
@@ -223,7 +237,21 @@ class ModelRouterService:
             self._update_stats(stats_key, success=True, latency_ms=latency_ms)
 
             content = response.choices[0].message.content or ""
+            if getattr(response.choices[0], "finish_reason", None) == "length":
+                # Cut off mid-file: better to drop this member than validate half a project.
+                raise ModelUnavailableError(
+                    provider=provider.value,
+                    model=model_name,
+                    details={"error": "output truncated (finish_reason=length)"},
+                )
             usage = response.usage if hasattr(response, "usage") else None
+            logger.info(
+                "model_call_ok",
+                provider=provider.value,
+                model=model_name,
+                prompt_tokens=usage.prompt_tokens if usage else None,
+                latency_ms=latency_ms,
+            )
 
             return {
                 "success": True,

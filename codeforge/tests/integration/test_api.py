@@ -22,8 +22,6 @@ class TestAPIEndpoints:
             "/api/v1/query",
             json={
                 "query": sample_query,
-                "context": None,
-                "preferences": None,
             },
         )
         
