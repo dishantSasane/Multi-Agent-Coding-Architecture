@@ -1,39 +1,59 @@
+# Full stack: Postgres + Redis + FastAPI backend + Vite frontend.
+#   cp codeforge/.env.example codeforge/.env   # add your API keys
+#   docker compose up --build
 services:
-  # ── FastAPI backend ─────────────────────────────────────────────────────────
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: codeforge
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-codeforge_password}
+      POSTGRES_DB: codeforge
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U codeforge"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Only used as an intent-analysis cache; the app keeps working if it is down.
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
   backend:
-    build:
-      context: ./codeforge
-      dockerfile: Dockerfile
+    build: ./codeforge
+    env_file: ./codeforge/.env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://codeforge:${POSTGRES_PASSWORD:-codeforge_password}@db:5432/codeforge
+      REDIS_URL: redis://redis:6379/0
     ports:
       - "8000:8000"
-    env_file: ./codeforge/.env
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
-    # Uncomment the volume below only if SANDBOX_ENABLED=True
-    # volumes:
-    #   - /var/run/docker.sock:/var/run/docker.sock
-    restart: unless-stopped
-
-  # ── Celery worker ───────────────────────────────────────────────────────────
-  celery:
-    build:
-      context: ./codeforge
-      dockerfile: Dockerfile
-    env_file: ./codeforge/.env
-    command: python -m celery -A app.celery_app worker --loglevel=info --concurrency=2 --pool=solo
     depends_on:
-      - backend
-    # Uncomment the volume below only if SANDBOX_ENABLED=True
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # Uncomment only if SANDBOX_ENABLED=True (gives the backend access to the host Docker):
     # volumes:
     #   - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped
 
-  # ── React / Vite frontend ────────────────────────────────────────────────────
   frontend:
-    build:
-      context: ./codeforge-dashboard
-      dockerfile: Dockerfile
+    build: ./codeforge-dashboard
+    environment:
+      VITE_PROXY_TARGET: http://backend:8000
     ports:
       - "5173:5173"
     depends_on:
       - backend
     restart: unless-stopped
+
+volumes:
+  postgres_data:
