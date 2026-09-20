@@ -18,16 +18,6 @@ export function formatDuration(ms: number): string {
   return `${minutes}m ${remainingSeconds}s`;
 }
 
-export function formatDate(dateString: string): string {
-  const date = new Date(dateString);
-  return date.toLocaleDateString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-}
-
 export function getLanguageFromFilename(filename: string): string {
   const ext = filename.split('.').pop()?.toLowerCase();
   const languageMap: Record<string, string> = {
@@ -61,4 +51,13 @@ export function getLanguageFromFilename(filename: string): string {
 export function truncate(str: string, length: number): string {
   if (str.length <= length) return str;
   return str.slice(0, length) + '...';
+}
+
+export function downloadBlob(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
 }

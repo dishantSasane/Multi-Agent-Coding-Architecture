@@ -1,13 +1,6 @@
-import { useState } from 'react';
-import { motion } from 'framer-motion';
-import { X, Bolt, Clock, Settings, ChevronRight } from 'lucide-react';
+import { Bolt, Clock, Settings, ChevronsLeft, ChevronsRight } from 'lucide-react';
+import { NavLink } from 'react-router-dom';
 import { cn } from '@/lib/utils';
-import { useNavigate, useLocation } from 'react-router-dom';
-
-interface SidebarProps {
-  collapsed?: boolean;
-  onToggle?: () => void;
-}
 
 const navItems = [
   { icon: Bolt, label: 'New Query', path: '/' },
@@ -15,77 +8,77 @@ const navItems = [
   { icon: Settings, label: 'Settings', path: '/settings' },
 ];
 
-export function Sidebar({ collapsed = false, onToggle }: SidebarProps) {
-  const navigate = useNavigate();
-  const location = useLocation();
-  const [isHovered, setIsHovered] = useState(false);
+interface NavLinksProps {
+  collapsed?: boolean;
+  onNavigate?: () => void;
+}
 
-  const effectiveCollapsed = collapsed && !isHovered;
-
+/** Shared by the desktop sidebar and the mobile drawer. */
+export function NavLinks({ collapsed = false, onNavigate }: NavLinksProps) {
   return (
-    <motion.aside
-      className="fixed left-0 top-0 h-full bg-slate-900 border-r border-slate-800 z-50"
-      initial={{ width: collapsed ? 64 : 240 }}
-      animate={{ width: effectiveCollapsed ? 64 : 240 }}
-      transition={{ duration: 0.2 }}
-      onMouseEnter={() => setIsHovered(true)}
-      onMouseLeave={() => setIsHovered(false)}
-    >
-      <div className="flex flex-col h-full">
-        {/* Logo */}
-        <div className="flex items-center justify-between p-4 border-b border-slate-800">
-          {!effectiveCollapsed && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="flex items-center gap-2"
-            >
-              <Bolt className="w-6 h-6 text-indigo-500" />
-              <span className="font-bold text-lg">CodeForge</span>
-            </motion.div>
-          )}
-          {effectiveCollapsed && <Bolt className="w-6 h-6 text-indigo-500 mx-auto" />}
-          
-          <button
-            onClick={onToggle}
-            className="p-1.5 rounded-lg hover:bg-slate-800 transition-colors"
+    <ul className="space-y-2">
+      {navItems.map(({ icon: Icon, label, path }) => (
+        <li key={path}>
+          <NavLink
+            to={path}
+            end
+            onClick={onNavigate}
+            className={({ isActive }) =>
+              cn(
+                'flex h-12 items-center gap-4 rounded-lg text-sm font-medium transition-colors duration-150 ease-out',
+                collapsed ? 'justify-center' : 'px-4',
+                isActive
+                  ? 'bg-primary text-primary-foreground'
+                  : 'text-muted-foreground hover:bg-secondary hover:text-foreground active:bg-secondary/70'
+              )
+            }
           >
-            {effectiveCollapsed ? <ChevronRight className="w-4 h-4" /> : <X className="w-4 h-4" />}
-          </button>
-        </div>
+            <Icon className="h-5 w-5 shrink-0" aria-hidden="true" />
+            <span className={cn(collapsed && 'sr-only')}>{label}</span>
+          </NavLink>
+        </li>
+      ))}
+    </ul>
+  );
+}
 
-        {/* Navigation */}
-        <nav className="flex-1 p-3 space-y-1">
-          {navItems.map((item) => {
-            const isActive = location.pathname === item.path;
-            const Icon = item.icon;
-            
-            return (
-              <button
-                key={item.path}
-                onClick={() => navigate(item.path)}
-                className={cn(
-                  'w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all',
-                  isActive
-                    ? 'bg-indigo-600 text-white'
-                    : 'text-slate-400 hover:bg-slate-800 hover:text-white'
-                )}
-              >
-                <Icon className="w-5 h-5 flex-shrink-0" />
-                {!effectiveCollapsed && (
-                  <motion.span
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    className="font-medium"
-                  >
-                    {item.label}
-                  </motion.span>
-                )}
-              </button>
-            );
-          })}
-        </nav>
+interface SidebarProps {
+  collapsed: boolean;
+  onToggle: () => void;
+}
+
+export function Sidebar({ collapsed, onToggle }: SidebarProps) {
+  return (
+    <aside
+      className={cn(
+        'fixed inset-y-0 left-0 z-30 hidden flex-col border-r bg-card transition-[width] duration-200 ease-out lg:flex',
+        collapsed ? 'w-16' : 'w-60'
+      )}
+    >
+      <div className={cn('flex h-16 items-center border-b', collapsed ? 'justify-center' : 'justify-between px-4')}>
+        {!collapsed && (
+          <span className="flex items-center gap-2 text-base font-bold">
+            <Bolt className="h-5 w-5 text-accent" aria-hidden="true" />
+            CodeForge
+          </span>
+        )}
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          aria-expanded={!collapsed}
+          className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-colors duration-150 ease-out hover:bg-secondary hover:text-foreground active:bg-secondary/70"
+        >
+          {collapsed ? (
+            <ChevronsRight className="h-4 w-4" aria-hidden="true" />
+          ) : (
+            <ChevronsLeft className="h-4 w-4" aria-hidden="true" />
+          )}
+        </button>
       </div>
-    </motion.aside>
+      <nav aria-label="Main" className="flex-1 p-2">
+        <NavLinks collapsed={collapsed} />
+      </nav>
+    </aside>
   );
 }

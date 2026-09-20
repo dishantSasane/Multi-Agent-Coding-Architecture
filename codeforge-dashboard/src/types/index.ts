@@ -24,14 +24,6 @@ export interface ModelActivity {
   currentOutput?: string;
 }
 
-export interface ClarifyingQuestion {
-  id: string;
-  question: string;
-  answer?: string;
-  answerType: 'text' | 'boolean' | 'select';
-  options?: string[];
-}
-
 export interface IntentAnalysis {
   summary: string;
   tech_stack: string[];
@@ -39,8 +31,9 @@ export interface IntentAnalysis {
   constraints: string[];
   edge_cases: string[];
   security_concerns: string[];
-  clarifying_questions: ClarifyingQuestion[];
+  clarifying_questions: string[];
   confidence_score: number;
+  task_type?: string;
 }
 
 export interface FileNode {
@@ -53,7 +46,7 @@ export interface FileNode {
 }
 
 export interface ValidationStage {
-  stage: 'syntax' | 'static_analysis' | 'security' | 'unit_tests' | 'property_tests';
+  stage: string;
   passed: boolean;
   details: string;
   errors?: string[];
@@ -126,7 +119,7 @@ export interface Task {
   progress: number;
   current_stage: string;
   intent_analysis?: IntentAnalysis;
-  clarifying_questions: ClarifyingQuestion[];
+  clarifying_questions: string[];
   model_activity: ModelActivity[];
   result: TaskResult | null;
   error: string | null;
@@ -142,27 +135,10 @@ export interface Task {
     passed: boolean;
     errors?: string[];
     warnings?: string[];
+    duration_ms?: number;
   }> | null;
   last_error?: string | null;
-}
-
-export interface WebSocketMessage {
-  type:
-    | 'status_update'
-    | 'model_progress'
-    | 'validation_result'
-    | 'completed'
-    | 'failed'
-    | 'error'
-    | 'debate_update';
-  task_id?: string;
-  status?: TaskStatus['status'];
-  progress?: number;
-  message?: string;
-  model?: string;
-  stage?: string;
-  passed?: boolean;
-  details?: string;
+  correction_attempts?: number;
 }
 
 export interface AppSettings {
@@ -181,7 +157,6 @@ export interface AppSettings {
   sandbox_memory_limit: string;
   sandbox_cpu_limit: number;
   sandbox_enable_network: boolean;
-  theme: 'dark' | 'light' | 'system';
   editor_font_size: number;
   editor_word_wrap: boolean;
 }
@@ -196,30 +171,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
   sandbox_memory_limit: '512m',
   sandbox_cpu_limit: 1.0,
   sandbox_enable_network: false,
-  theme: 'dark',
   editor_font_size: 14,
   editor_word_wrap: false,
-};
-
-export const STAGE_ORDER: TaskStatus['status'][] = [
-  'PENDING',
-  'INTENT_ANALYZING',
-  'AWAITING_CONFIRMATION',
-  'CONFIRMED',
-  'DECOMPOSING',
-  'GENERATING',
-  'DEBATING',
-  'SYNTHESIZING',
-  'VALIDATING',
-  'SANDBOX_EXECUTING',
-  'CORRECTING',
-  'COMPLETED',
-];
-
-export const MODEL_ICONS: Record<string, string> = {
-  claude: '🟣',
-  'gpt-4o': '🟢',
-  qwen: '🔵',
-  kimi: '🟡',
-  gemini: '🟠',
 };

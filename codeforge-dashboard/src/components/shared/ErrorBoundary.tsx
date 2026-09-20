@@ -39,9 +39,9 @@ export class ErrorBoundary extends Component<Props, State> {
       }
 
       return (
-        <div className="flex flex-col items-center justify-center p-8 text-center">
-          <AlertTriangle className="w-16 h-16 text-amber-500 mb-4" />
-          <h2 className="text-xl font-semibold mb-2">Something went wrong</h2>
+        <div role="alert" className="flex flex-col items-center justify-center p-8 text-center">
+          <AlertTriangle className="mb-4 h-16 w-16 text-warning" aria-hidden="true" />
+          <h2 className="mb-2 text-xl font-medium">Something went wrong</h2>
           <p className="text-muted-foreground mb-4 max-w-md">
             {this.state.error?.message || 'An unexpected error occurred.'}
           </p>
@@ -55,7 +55,7 @@ export class ErrorBoundary extends Component<Props, State> {
               );
               window.open(`mailto:support@example.com?subject=CodeForge Error Report&body=${reportBody}`);
             }}
-            className="mt-4 text-sm text-muted-foreground hover:text-foreground transition-colors"
+            className="mt-4 text-sm text-muted-foreground hover:text-foreground transition-colors duration-150 ease-out"
           >
             Report Issue
           </button>

@@ -41,11 +41,31 @@ export default {
           DEFAULT: "hsl(var(--card))",
           foreground: "hsl(var(--card-foreground))",
         },
+        success: "hsl(var(--success))",
+        warning: "hsl(var(--warning))",
+        code: {
+          DEFAULT: "hsl(var(--code))",
+          foreground: "hsl(var(--code-foreground))",
+        },
+      },
+      // size / line-height scale (small text gets proportionally more leading)
+      fontSize: {
+        xs: ["0.75rem", "1.125rem"],
+        sm: ["0.875rem", "1.25rem"],
+        base: ["1rem", "1.5rem"],
+        lg: ["1.25rem", "1.75rem"],
+        xl: ["1.5rem", "2rem"],
+        "2xl": ["2rem", "2.25rem"],
+      },
+      // three elevations: flat (none), card, overlay
+      boxShadow: {
+        card: "0 1px 2px 0 rgb(31 29 26 / 0.06)",
+        overlay: "0 8px 24px -4px rgb(31 29 26 / 0.16)",
       },
       borderRadius: {
         lg: "var(--radius)",
-        md: "calc(var(--radius) - 2px)",
-        sm: "calc(var(--radius) - 4px)",
+        md: "var(--radius)",
+        sm: "var(--radius)",
       },
       fontFamily: {
         sans: ["Inter", "system-ui", "sans-serif"],

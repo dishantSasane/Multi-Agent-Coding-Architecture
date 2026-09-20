@@ -1,49 +1,29 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { Sidebar } from './Sidebar';
 import { Header } from './Header';
-import { testConnection } from '@/lib/api';
-import { useAppStore } from '@/store/appStore';
+import { cn } from '@/lib/utils';
 
 interface LayoutProps {
   children: React.ReactNode;
 }
 
 export function Layout({ children }: LayoutProps) {
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const setConnectionStatus = useAppStore((s) => s.setConnectionStatus);
-
-  // Health-check loop: resolve "Connecting..." on mount, re-check every 30 s
-  useEffect(() => {
-    let cancelled = false;
-
-    const check = async () => {
-      const ok = await testConnection();
-      if (!cancelled) {
-        setConnectionStatus(ok ? 'online' : 'offline');
-      }
-    };
-
-    check();
-    const id = setInterval(check, 30_000);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, [setConnectionStatus]);
+  const [collapsed, setCollapsed] = useState(false);
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100">
-      <Sidebar
-        collapsed={sidebarCollapsed}
-        onToggle={() => setSidebarCollapsed(!sidebarCollapsed)}
-      />
-
-      <div
-        className="transition-all duration-200"
-        style={{ marginLeft: sidebarCollapsed ? 64 : 240 }}
+    <div className="min-h-screen bg-background text-foreground">
+      <a
+        href="#main"
+        className="sr-only rounded-lg bg-card px-4 py-2 text-sm font-medium shadow-overlay focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-50"
       >
+        Skip to content
+      </a>
+      <Sidebar collapsed={collapsed} onToggle={() => setCollapsed((c) => !c)} />
+      <div className={cn('transition-[padding] duration-200 ease-out', collapsed ? 'lg:pl-16' : 'lg:pl-60')}>
         <Header />
-        <main className="p-6">{children}</main>
+        <main id="main" className="mx-auto max-w-7xl px-4 py-8 md:px-6 lg:px-8">
+          {children}
+        </main>
       </div>
     </div>
   );

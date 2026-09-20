@@ -1,45 +1,49 @@
 import React from 'react';
 import { cn } from '@/lib/utils';
-import { LoadingSpinner } from './LoadingSpinner';
 
 interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: 'primary' | 'secondary' | 'ghost' | 'destructive';
   size?: 'sm' | 'md' | 'lg';
+  /** Disables the button and marks it busy. Change the label to say what is happening. */
   isLoading?: boolean;
   children: React.ReactNode;
 }
+
+const variants = {
+  primary: 'bg-primary text-primary-foreground hover:bg-primary/90 active:bg-primary/80',
+  secondary: 'bg-secondary text-secondary-foreground hover:bg-secondary/70 active:bg-secondary/50',
+  ghost: 'bg-transparent text-foreground hover:bg-secondary active:bg-secondary/70',
+  destructive: 'bg-destructive text-destructive-foreground hover:bg-destructive/90 active:bg-destructive/80',
+};
+
+const sizes = {
+  sm: 'h-8 px-4 text-sm',
+  md: 'h-10 px-4 text-sm',
+  lg: 'h-12 px-6 text-base',
+};
 
 export function Button({
   variant = 'primary',
   size = 'md',
   isLoading = false,
-  className = '',
+  className,
   disabled,
   children,
   ...props
 }: ButtonProps) {
-  const baseStyles = 'inline-flex items-center justify-center font-medium rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed';
-  
-  const variantStyles = {
-    primary: 'bg-indigo-600 text-white hover:bg-indigo-700 focus:ring-indigo-500',
-    secondary: 'bg-slate-700 text-white hover:bg-slate-600 focus:ring-slate-500',
-    ghost: 'bg-transparent text-slate-300 hover:bg-slate-800 focus:ring-slate-500',
-    destructive: 'bg-rose-600 text-white hover:bg-rose-700 focus:ring-rose-500',
-  };
-  
-  const sizeStyles = {
-    sm: 'px-3 py-1.5 text-sm',
-    md: 'px-4 py-2 text-base',
-    lg: 'px-6 py-3 text-lg',
-  };
-
   return (
     <button
-      className={cn(baseStyles, variantStyles[variant], sizeStyles[size], className)}
+      type="button"
+      className={cn(
+        'inline-flex items-center justify-center gap-2 rounded-lg font-medium transition-colors duration-150 ease-out disabled:pointer-events-none disabled:opacity-50',
+        variants[variant],
+        sizes[size],
+        className
+      )}
       disabled={disabled || isLoading}
+      aria-busy={isLoading || undefined}
       {...props}
     >
-      {isLoading && <LoadingSpinner size="sm" className="mr-2" />}
       {children}
     </button>
   );

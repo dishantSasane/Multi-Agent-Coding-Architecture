@@ -3,8 +3,65 @@
 @tailwind utilities;
 
 @layer base {
+  :root {
+    --background: 38 35% 94%;
+    --foreground: 36 9% 11%;
+    --card: 40 43% 97%;
+    --card-foreground: 36 9% 11%;
+    --popover: 40 43% 97%;
+    --popover-foreground: 36 9% 11%;
+    --primary: 36 9% 11%;
+    --primary-foreground: 40 43% 97%;
+    --secondary: 40 32% 89%;
+    --secondary-foreground: 36 9% 11%;
+    --muted: 40 32% 89%;
+    --muted-foreground: 36 8% 39%;
+    --accent: 33 32% 36%;
+    --accent-foreground: 40 43% 97%;
+    --destructive: 7 48% 44%;
+    --destructive-foreground: 40 43% 97%;
+    --success: 111 18% 35%;
+    --warning: 42 63% 33%;
+    --border: 40 24% 85%;
+    --input: 41 21% 80%;
+    --ring: 33 32% 36%;
+    --code: 36 9% 11%;
+    --code-foreground: 40 33% 89%;
+    /* One radius for the whole UI; pills use rounded-full */
+    --radius: 0.5rem;
+    color-scheme: light;
+  }
+
+  .dark {
+    --background: 45 10% 8%;
+    --foreground: 40 33% 89%;
+    --card: 36 9% 10%;
+    --card-foreground: 40 33% 89%;
+    --popover: 36 9% 10%;
+    --popover-foreground: 40 33% 89%;
+    --primary: 40 33% 89%;
+    --primary-foreground: 45 10% 8%;
+    --secondary: 30 9% 14%;
+    --secondary-foreground: 40 33% 89%;
+    --muted: 30 9% 14%;
+    --muted-foreground: 38 9% 60%;
+    --accent: 36 42% 63%;
+    --accent-foreground: 45 10% 8%;
+    --destructive: 10 58% 64%;
+    --destructive-foreground: 45 10% 8%;
+    --success: 115 19% 62%;
+    --warning: 42 59% 56%;
+    --border: 38 10% 16%;
+    --input: 38 10% 21%;
+    --ring: 36 42% 63%;
+    --code: 40 11% 5%;
+    --code-foreground: 40 33% 89%;
+    color-scheme: dark;
+  }
+
   * {
     box-sizing: border-box;
+    border-color: hsl(var(--border));
   }
 
   html, body, #root {
@@ -15,8 +72,8 @@
 
   body {
     font-family: 'Inter', system-ui, sans-serif;
-    background-color: #020617; /* slate-950 */
-    color: #f1f5f9; /* slate-100 */
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
@@ -25,19 +82,25 @@
     font-family: 'JetBrains Mono', 'Fira Code', monospace;
   }
 
-  /* Scrollbar styling */
-  ::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
+  /* Every interactive element gets the same visible keyboard focus */
+  :focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
   }
-  ::-webkit-scrollbar-track {
-    background: #0f172a;
+
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
   }
   ::-webkit-scrollbar-thumb {
-    background: #334155;
-    border-radius: 3px;
+    background: hsl(var(--input));
+    border-radius: 4px;
   }
-  ::-webkit-scrollbar-thumb:hover {
-    background: #475569;
+
+  @media (prefers-reduced-motion: reduce) {
+    *, ::before, ::after {
+      animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+    }
   }
 }

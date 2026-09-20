@@ -67,11 +67,6 @@ export interface SubmitQueryResponse {
   status: string;
 }
 
-export interface ConfirmTaskRequest {
-  answers: Array<{ question_id: string; answer: string | boolean }>;
-  confirmed: boolean;
-}
-
 export const submitQuery = async (
   query: string,
   context?: Record<string, unknown>,
@@ -85,21 +80,33 @@ export const submitQuery = async (
   return response.data;
 };
 
-export const getTaskStatus = async (taskId: string): Promise<Task> => {
-  const response = await api.get<Task>(`/api/v1/query/${taskId}/status`);
-  return response.data;
+// Shape returned by GET /status and POST /confirm (backend TaskStatusResponse).
+// Status arrives lowercase ("awaiting_confirmation"); the UI uses uppercase.
+export type TaskSnapshot = Omit<Partial<Task>, 'status'> & {
+  status: Task['status'];
+  user_query: string;
+  correction_attempts: number;
 };
 
+const toSnapshot = (data: Record<string, unknown>): TaskSnapshot =>
+  ({ ...data, status: String(data.status).toUpperCase() }) as TaskSnapshot;
+
+export const getTaskStatus = async (taskId: string): Promise<TaskSnapshot> => {
+  const response = await api.get(`/api/v1/query/${taskId}/status`);
+  return toSnapshot(response.data);
+};
+
+/** confirmed=true resumes generation; false re-analyses with the clarifications. */
 export const confirmTask = async (
   taskId: string,
-  answers: Array<{ question_id: string; answer: string | boolean }>,
-  confirmed: boolean = true
-): Promise<Task> => {
-  const response = await api.post<Task>(`/api/v1/query/${taskId}/confirm`, {
-    answers,
+  confirmed: boolean,
+  clarifications?: string
+): Promise<TaskSnapshot> => {
+  const response = await api.post(`/api/v1/query/${taskId}/confirm`, {
     confirmed,
+    clarifications: clarifications || null,
   });
-  return response.data;
+  return toSnapshot(response.data);
 };
 
 export const getTaskResult = async (taskId: string): Promise<TaskResult> => {

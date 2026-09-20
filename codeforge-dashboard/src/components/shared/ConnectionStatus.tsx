@@ -1,47 +1,21 @@
-import { Wifi, WifiOff, Loader2 } from 'lucide-react';
+import { Wifi, WifiOff } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { useAppStore } from '@/store/appStore';
+import { useHealth } from '@/hooks/useTask';
 
 export function ConnectionStatus() {
-  const connectionStatus = useAppStore((state) => state.connectionStatus);
+  const { data, isPending } = useHealth();
+  const state = isPending ? 'checking' : data ? 'online' : 'offline';
 
-  const statusConfig = {
-    online: {
-      icon: Wifi,
-      label: 'Online',
-      color: 'text-emerald-500',
-      bg: 'bg-emerald-500/10',
-      pulse: true,
-    },
-    offline: {
-      icon: WifiOff,
-      label: 'Offline',
-      color: 'text-rose-500',
-      bg: 'bg-rose-500/10',
-      pulse: false,
-    },
-    checking: {
-      icon: Loader2,
-      label: 'Connecting...',
-      color: 'text-amber-500',
-      bg: 'bg-amber-500/10',
-      pulse: false,
-    },
-  };
-
-  const config = statusConfig[connectionStatus];
-  const Icon = config.icon;
+  const config = {
+    online: { Icon: Wifi, label: 'Backend online', color: 'text-success' },
+    offline: { Icon: WifiOff, label: 'Backend offline', color: 'text-destructive' },
+    checking: { Icon: Wifi, label: 'Checking backend', color: 'text-muted-foreground' },
+  }[state];
 
   return (
-    <div
-      className={cn(
-        'flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium transition-all',
-        config.bg,
-        config.color
-      )}
-    >
-      <Icon className={cn('w-4 h-4', config.pulse && 'animate-pulse')} />
-      <span>{config.label}</span>
+    <div role="status" className={cn('flex items-center gap-2 text-sm font-medium', config.color)}>
+      <config.Icon className="h-4 w-4" aria-hidden="true" />
+      <span className="hidden sm:inline">{config.label}</span>
     </div>
   );
 }
