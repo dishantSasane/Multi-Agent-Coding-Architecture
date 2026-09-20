@@ -1,220 +1,166 @@
-# CodeForge — Multi-Agent Coding Orchestrator
+# CodeForge
 
-> **A multi-agent AI software engineering platform that decomposes coding tasks, routes work across different LLMs and APIs, collects and reasons over their results, validates the solutions, and combines the strongest results into a structured software project.**
+**Describe what you want to build. Several LLMs write it in parallel, every candidate is validated, and you get a downloadable multi-file project.**
 
-CodeForge is built around a simple idea: **no single model has to do everything.**
+CodeForge is a FastAPI + React app. A request runs through a pipeline: intent analysis → parallel generation across three LLM providers → per-candidate validation → best candidate selected → final validation → downloadable files.
 
-A natural-language software request can be broken into smaller tasks and routed to different AI models or external APIs based on the work required. CodeForge collects the resulting outputs, compares and reasons over them, validates the generated code, and combines the results into a coherent, structured multi-file project.
+[![Watch the 24-second demo](assets/03-result.png)](assets/codeforge-demo.mp4)
 
-The system is designed to work across multiple model providers and model families, including **OpenAI GPT, Anthropic Claude, Qwen, Kimi, DeepSeek, Groq, and Google Gemini**, through a common provider abstraction.
+<sub>Click the image to watch the demo (24 s, recorded from a real run: prompt → generation → files → validation).</sub>
 
-The final output is not simply an LLM response. It is a **structured project that has passed the applicable generation, reasoning, extraction, validation, and testing stages** before being presented through the CodeForge dashboard.
-
----
-
-## Full Demo
-
-**[▶ Watch the CodeForge Demonstration](assets/codeforge-demo.mp4)**
-
-> If GitHub does not provide inline playback for the local video, link this section to the hosted version of the demo instead.
-
-<!--
-If GitHub does not render the local video inline, replace the line above
-with a link to the uploaded video (YouTube, Google Drive, etc.).
--->
+| | |
+|---|---|
+| ![Home](assets/01-home.png) | ![Generating](assets/02-running.png) |
+| **Describe the project.** | **Watch the pipeline run** (step 6 of 12 shown). |
+| ![Result](assets/03-result.png) | ![Full result](assets/04-full-result.png) |
+| **Browse the generated files** with per-file tabs and ZIP download. | **Every step checked, 4/4 validation stages passed.** |
 
 ---
 
-## Screenshots
+## How it works
 
-### Dashboard
-
-![CodeForge Dashboard](assets/dashboard.png)
-
-### Multi-Agent Pipeline
-
-![Multi-Agent Pipeline](assets/pipeline.png)
-
-
-### Validation Results
-
-![Validation Results](assets/validation.png)
-
-
----
-
-### Supported AI Providers
-
-- **OpenAI GPT**
-- **Anthropic Claude**
-- **Qwen**
-- **Kimi**
-- **DeepSeek**
-- **Groq**
-- **Google Gemini**
-- **LiteLLM** — unified provider abstraction
-
-CodeForge can also orchestrate work involving external APIs and services such as Google APIs, Gmail, MCP, REST APIs, databases, and Git/GitHub workflows.
-
----
-
-# Architecture
-
-CodeForge keeps generated projects as structured `code_files` rather than flattening everything into a single code block.
-
-```text
-                         USER
-                           │
-                           ▼
-                  ┌────────────────┐
-                  │ Task / Intent  │
-                  │ Decomposition  │
-                  └───────┬────────┘
-                          │
-              ┌───────────┼───────────┐
-              ▼           ▼           ▼
-           Model/API   Model/API   Model/API
-              │           │           │
-              └───────────┼───────────┘
-                          ▼
-                 Collect & Normalize
-                          │
-                          ▼
-                  Reason / Critique
-                          │
-                          ▼
-                      Synthesis
-                          │
-                          ▼
-                Structured Code Files
-                          │
-                          ▼
-                 Validate & Test
-                          │
-                          ▼
-                   CodeForge UI
+```
+Query ─▶ Intent analysis (Gemini) ─▶ [you confirm if the request is ambiguous]
+      ─▶ Parallel generation: Groq + OpenRouter (free models) + Gemini
+      ─▶ Validate EVERY candidate ─▶ pick the best valid one
+      ─▶ Final validation ─▶ optional self-correction ─▶ optional Docker sandbox ─▶ result
 ```
 
----
+**Validation** runs locally on the AST (no API calls) in four stages: syntax, static analysis (bare `except`, print, very long lines), security scan (`eval`, `exec`, `os.system`, `__import__`) and import resolution.
 
-# Key Capabilities
+A candidate that fails validation, or that a provider cut off mid-file (`finish_reason=length`), is dropped before the winner is chosen. If no candidate passes, the task fails with the real validation errors instead of shipping broken code.
 
-- Natural-language software requirements
-- Task decomposition and intelligent routing
-- Multi-model / multi-provider generation
-- Parallel candidate solutions
-- Cross-model reasoning and critique
-- Solution synthesis
-- Structured multi-file extraction
-- Nested and mixed-language projects
-- File-aware validation
-- Syntax and import validation
-- Optional sandbox execution
-- Real-time WebSocket progress
-- React dashboard
-- Celery background processing
-- PostgreSQL persistence
-- Redis task processing
+**Providers** all run at the same time; none is a fallback for another. Each provider only takes part if its API key is set.
+
+| Provider | Role | Model |
+|---|---|---|
+| Groq | generation | `openai/gpt-oss-120b` |
+| OpenRouter | generation | free (`:free`) models only, tried in order on 429/503/404 |
+| Gemini | intent analysis + generation | `gemini-3.1-flash-lite` |
 
 ---
 
-# Technology Stack
+## Quick start
 
-**Backend:** Python · FastAPI · SQLAlchemy · Pydantic · Celery · LiteLLM · WebSockets
-
-**Frontend:** React · TypeScript · Vite · Zustand
-
-**Infrastructure:** PostgreSQL / Neon · Redis / Upstash · Docker
-
-**AI:** OpenAI GPT · Anthropic Claude · Qwen · Kimi · DeepSeek · Groq · Google Gemini · LiteLLM
-
----
-
-# Project Structure
-
-```text
-Multi-Agent-Coding-Architecture/
-├── codeforge/                 # FastAPI backend
-│   ├── app/
-│   │   ├── api/
-│   │   ├── core/
-│   │   ├── models/
-│   │   ├── prompts/
-│   │   └── services/
-│   ├── requirements.txt
-│   └── .env.example
-│
-├── codeforge-dashboard/       # React + TypeScript frontend
-├── assets/                    # Demo video and screenshots
-├── docker-compose.yml
-└── README.md
-```
-
----
-
-# Setup
-
-## Backend
+You need Docker and API keys for at least one provider ([Groq](https://console.groq.com/keys), [OpenRouter](https://openrouter.ai/keys), [Gemini](https://aistudio.google.com/apikey); all have free tiers).
 
 ```bash
-conda create -n codeforge python=3.11 -y
-conda activate codeforge
+git clone <repo-url> && cd <repo>
+cp codeforge/.env.example codeforge/.env      # add your API keys
+docker compose up --build
+```
 
+Open **http://localhost:5173**. The API is on http://localhost:8000 (interactive docs at `/docs`).
+
+The stack is Postgres + Redis + backend + frontend. Redis is only an intent-analysis cache; the backend still works without it.
+
+### Without Docker
+
+```bash
+# backend (Python 3.11+)
 cd codeforge
-pip install -r requirements.txt
-cp .env.example .env
+python -m venv .venv && . .venv/bin/activate
+pip install -r requirements-dev.txt
+cp .env.example .env                          # keys + DATABASE_URL pointing at your Postgres
+uvicorn app.main:app --reload --port 8000
 
-python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-```
-
-## Celery
-
-In a second terminal:
-
-```bash
-conda activate codeforge
-cd codeforge
-python -m celery -A app.celery_app worker --loglevel=info --pool=solo
-```
-
-## Frontend
-
-```bash
+# frontend (Node 18+), in another terminal
 cd codeforge-dashboard
-npm install
-npm run dev
+npm install && npm run dev                    # http://localhost:5173, proxies /api to :8000
 ```
 
-Open `http://localhost:5173`.
+Tables are created on startup. You need a running Postgres for `DATABASE_URL`.
 
 ---
 
-# Configuration
+## API
 
-Configure the required services in `codeforge/.env`:
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/api/v1/query` | Submit `{"query": "..."}`; starts the pipeline, returns `task_id` |
+| `GET` | `/api/v1/query/{id}/status` | Status, files, validation results |
+| `POST` | `/api/v1/query/{id}/confirm` | Confirm (or clarify) the analysed intent when asked |
+| `GET` | `/api/v1/query/{id}/result` | Final result |
+| `WS` | `/api/v1/ws/{id}` | Live progress |
+| `GET` | `/health` | Liveness |
 
-```env
-GROQ_API_KEY=your_groq_api_key
-DATABASE_URL=your_postgresql_connection_string
-REDIS_URL=your_redis_connection_string
-CELERY_BROKER_URL=your_redis_connection_string
-CELERY_RESULT_BACKEND=your_redis_connection_string
+```bash
+curl -X POST localhost:8000/api/v1/query -H 'content-type: application/json' \
+  -d '{"query":"A URL shortener with a FastAPI backend and an HTML frontend"}'
 ```
 
-> Never commit `.env` files or API keys.
+Task status runs `pending → intent_analyzing → [awaiting_confirmation → confirmed] → generating → debating → synthesizing → validating → completed | failed` (`debating` is the candidate-selection step; it makes no LLM calls unless `USE_DEBATE_ENGINE=True`).
 
 ---
 
-# Project Status
+## Configuration
 
-**Working Prototype — Active Development**
+Set in `codeforge/.env` (see `.env.example`).
 
-The current implementation demonstrates the complete multi-agent orchestration workflow from natural-language request to validated, structured software output.
+| Variable | Default | Meaning |
+|---|---|---|
+| `GROQ_API_KEY` / `OPENROUTER_API_KEY` / `GEMINI_API_KEY` | – | Providers with a key take part in generation |
+| `DEFAULT_ENSEMBLE_SIZE` | `2` in code, `3` in `.env.example` | How many providers generate in parallel |
+| `MAX_CORRECTION_ATTEMPTS` | `0` | `>0` sends failed validations back to the model to repair (costs extra calls) |
+| `USE_DEBATE_ENGINE` | `False` | Extra LLM critique stage |
+| `SANDBOX_ENABLED` | `True` in code, `False` in `.env.example` | Execute generated code in Docker (needs Docker access) |
+| `DATABASE_URL` / `REDIS_URL` | compose service names | Postgres (required), Redis (optional) |
+| `CORS_ORIGINS` | localhost dev origins | Restrict this in production |
+| `DEBUG`, `LOG_LEVEL`, `SECRET_KEY` | | Set a real `SECRET_KEY` in production |
+
+API keys are redacted from all log output.
 
 ---
 
-# Author
+## Development
 
-**Dishant Sasane**
+```bash
+cd codeforge && . .venv/bin/activate
+pytest tests/unit                 # 125 tests, no network or database needed
+ruff check app && mypy app        # both still report pre-existing findings
+```
 
-Built as a hands-on exploration of multi-agent AI systems, software engineering automation, model orchestration, structured code generation, validation, and full-stack AI application architecture.
+Integration tests need Postgres and Redis; point them at yours:
+
+```bash
+TEST_DATABASE_URL=postgresql+asyncpg://user:pass@localhost:5432/codeforge_test \
+DATABASE_URL=postgresql+asyncpg://user:pass@localhost:5432/codeforge \
+REDIS_URL=redis://localhost:6379/0 pytest tests/integration
+```
+
+## Project structure
+
+```
+codeforge/                  FastAPI backend
+  app/
+    api/v1/endpoints/       query, confirmation, generation, status, websocket
+    core/                   constants, circuit breaker, exceptions
+    models/                 SQLAlchemy models + Pydantic schemas
+    prompts/                intent-analysis prompt
+    services/               orchestrator, ensemble, model_router, validator,
+                            code_extractor, synthesis, self_correction, sandbox, ...
+    utils/                  logging (with key redaction)
+  tests/                    unit + integration
+  Dockerfile  requirements.txt  requirements-dev.txt  .env.example
+codeforge-dashboard/        React + Vite + TypeScript UI
+assets/                     screenshots and demo video
+docker-compose.yml          db + redis + backend + frontend
+```
+
+---
+
+## Known limits
+
+- **Validation is not execution.** Passing all four stages means the code parses, its imports resolve and it has no dangerous calls. It does not mean the generated app runs. Generated projects are not executed unless the sandbox is enabled.
+- **Made-up packages can slip through.** Import resolution skips unknown single-word names, so a hallucinated dependency in `requirements.txt` is not flagged.
+- **Free tiers are flaky.** OpenRouter's free models are often rate-limited or slow, and Gemini returns occasional 503s. A provider that fails is dropped and the others continue; a task can take up to about 2 minutes when OpenRouter is slow.
+- **Groq's free tier** limits a request to 8,000 tokens (prompt plus output), so very large projects can be cut off. Such output is detected and discarded.
+- **An explicit request wins over the system prompt.** Asking for `eval()` gets you `eval()`, and the validator then blocks the task.
+- **Self-correction is off by default.** With `MAX_CORRECTION_ATTEMPTS=0` a validation failure is final.
+- **No authentication or rate limiting.** Do not expose it publicly as is. See [Deploying](#deploying).
+
+## Deploying
+
+Before putting this on the internet, add authentication and per-user rate limits; otherwise anyone who finds the URL can spend your provider quota. Then restrict `CORS_ORIGINS`, set a real `SECRET_KEY`, use a managed Postgres, and serve the frontend as a static build (`npm run build`), not the Vite dev server.
+
+The pipeline runs as a FastAPI background task after the HTTP response returns, so choose a host that keeps CPU allocated between requests (an always-on container, or Cloud Run with CPU always allocated and at least one instance).
